@@ -48,6 +48,7 @@ def main():
     parser.add_argument("--max-completion-length", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--no-vllm", action="store_true", help="Disable vLLM (slower but works without trl[vllm])")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -89,8 +90,8 @@ def main():
         logging_steps=10,
         save_steps=args.save_every,
         # L4 24GB VRAM settings
-        use_vllm=True,
-        vllm_gpu_memory_utilization=0.7,
+        use_vllm=not args.no_vllm,
+        vllm_gpu_memory_utilization=0.7 if not args.no_vllm else None,
         # Reward scaling: batch-level std reduces difficulty bias
         scale_rewards="batch",
         # Disable KL penalty (standard practice in modern GRPO)
