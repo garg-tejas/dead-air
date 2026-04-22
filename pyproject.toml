@@ -28,6 +28,7 @@ train = [
     "accelerate>=0.30.0",
     "datasets>=2.19.0",
     "torch>=2.2.0",
+    "bitsandbytes>=0.43.0",
 ]
 dev = [
     "pytest>=8.0.0",
