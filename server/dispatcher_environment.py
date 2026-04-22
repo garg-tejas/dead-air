@@ -94,6 +94,17 @@ class DispatcherEnvironment(Environment):
         for unit in self.units:
             unit_events = unit.tick(self.city_graph, self.rng)
             events.extend(unit_events)
+            # Resolve calls when unit clears them
+            for evt in unit_events:
+                if "cleared call" in evt:
+                    # Extract call ID from event string
+                    parts = evt.split()
+                    if len(parts) >= 4:
+                        try:
+                            call_id = int(parts[-1])
+                            self.call_generator.resolve_call(call_id, self.step_count)
+                        except ValueError:
+                            pass
             # Submit status to radio buffer
             self.radio_buffer.submit(self.step_count, unit.get_observable_status())
 
@@ -132,12 +143,28 @@ class DispatcherEnvironment(Environment):
         if self._heatwave_active > 0:
             self._heatwave_active -= 1
 
+        # Mark fatalities for unresolved calls that exceeded deadline
+        for call in self.call_generator.get_active():
+            if not call.get("resolved", False):
+                if call["time_elapsed"] > call.get("effective_deadline", float("inf")):
+                    call["fatality"] = True
+
         # Check episode end
         done = False
         reward = None
         if self.step_count >= MAX_STEPS:
             done = True
             self._episode_ended = True
+            # Compute episode reward
+            from .reward import RewardComputer
+            rc = RewardComputer(self.city_graph)
+            gt = self.get_ground_truth()
+            result = rc.compute_episode_reward(
+                calls=gt["calls"],
+                units=self.units,
+                oracle_assignments=gt["optimal_assignments"],
+            )
+            reward = result["episode_reward"]
 
         obs = self._build_observation(reward=reward, done=done, events=events)
         return obs
