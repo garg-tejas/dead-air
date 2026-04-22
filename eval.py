@@ -13,7 +13,7 @@ def greedy_agent_step(obs: Dict[str, Any]) -> Dict[str, Any]:
     if not active_calls:
         return {"action_type": "hold"}
 
-    # Prioritize by reported type severity (simplified)
+    # Prioritize by reported type severity
     priority = {"cardiac": 3, "trauma": 2, "fire": 1, "false_alarm": 0}
     sorted_calls = sorted(
         active_calls,
@@ -25,12 +25,11 @@ def greedy_agent_step(obs: Dict[str, Any]) -> Dict[str, Any]:
         call_id = call["call_id"]
         call_loc = call["location"]
 
-        # Find closest idle unit
+        # Find closest idle unit using node distance (proxy for graph distance)
         best_unit = None
         best_dist = float("inf")
         for u in unit_statuses:
             if u.get("last_known_status") == "idle":
-                # Use unit location as proxy for distance
                 dist = abs(u.get("last_known_location", 0) - call_loc)
                 if dist < best_dist:
                     best_dist = dist
@@ -46,11 +45,12 @@ def run_episodes(
     env: DispatcherEnvironment,
     num_episodes: int = 10,
     agent_type: str = "greedy",
+    difficulty: str = "learning",
 ) -> List[float]:
     """Run episodes and return rewards."""
     rewards = []
     for ep in range(num_episodes):
-        obs = env.reset(difficulty="learning")
+        obs = env.reset(difficulty=difficulty)
         done = False
         step_count = 0
         while not done and step_count < 100:
@@ -61,24 +61,18 @@ def run_episodes(
             obs = env.step(action)
             done = obs.get("done", False)
             step_count += 1
-        # Compute reward at end
-        from dead_air.server.reward import RewardComputer
-        rc = RewardComputer(env.city_graph)
-        gt = env.get_ground_truth()
-        result = rc.compute_episode_reward(
-            calls=gt["calls"],
-            units=env.units,
-            oracle_assignments=gt["optimal_assignments"],
-        )
-        rewards.append(result["episode_reward"])
+        # Reward is set by env.step() at episode end
+        reward = obs.get("reward", 0.0) or 0.0
+        rewards.append(reward)
     return rewards
 
 
 def main():
     print("Running Greedy Baseline Evaluation...")
     env = DispatcherEnvironment(seed=42)
-    rewards = run_episodes(env, num_episodes=10, agent_type="greedy")
-    print(f"Mean reward over 10 episodes: {sum(rewards)/len(rewards):.3f}")
+    rewards = run_episodes(env, num_episodes=10, agent_type="greedy", difficulty="learning")
+    mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
+    print(f"Mean reward over {len(rewards)} episodes: {mean_reward:.3f}")
     print(f"Rewards: {[round(r, 3) for r in rewards]}")
 
 

@@ -1,12 +1,17 @@
-"""GRPO training script for Dead Air using HF TRL."""
+"""Rollout collection script for Dead Air.
+
+Collects episodes by running the LLM against the environment.
+Useful for warm-start data generation or debugging before GRPO training.
+
+Usage:
+    uv sync --extra train
+    python train.py --model Qwen/Qwen3-1.7B --episodes 50 --output-dir ./outputs/rollouts
+"""
 
 import argparse
 import json
 import os
 from typing import Any, Dict, List
-
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from dead_air.server.dispatcher_environment import DispatcherEnvironment
 
@@ -31,7 +36,7 @@ def format_prompt(obs: Dict[str, Any]) -> str:
         lines.append(f"- {e}")
     lines.append("")
     lines.append("## Dispatch Log")
-    lines.append(obs.get("dispatch_log", "(empty)"))
+    lines.append(obs.get("dispatch_log", "(empty)")[-500:] if obs.get("dispatch_log") else "(empty)")
     lines.append("")
     lines.append("Choose action: dispatch, reroute, stage, request_mutual_aid, divert, hold, log, verify")
     lines.append("Respond with JSON: {\"action_type\": ..., \"unit_id\": ..., \"call_id\": ...}")
@@ -41,7 +46,6 @@ def format_prompt(obs: Dict[str, Any]) -> str:
 def parse_action(text: str) -> Dict[str, Any]:
     """Parse LLM output into structured action."""
     import re
-    # Try to find JSON in the output
     json_match = re.search(r'\{.*?\}', text, re.DOTALL)
     if json_match:
         try:
@@ -50,18 +54,18 @@ def parse_action(text: str) -> Dict[str, Any]:
                 return action
         except json.JSONDecodeError:
             pass
-    # Fallback to hold
     return {"action_type": "hold"}
 
 
 def collect_rollout(env: DispatcherEnvironment, model, tokenizer, device: str = "cuda") -> Dict[str, Any]:
     """Collect one episode rollout."""
+    import torch
     obs = env.reset(difficulty="learning")
     done = False
     steps = 0
     total_reward = 0.0
-    prompts = []
-    completions = []
+    prompts: List[str] = []
+    completions: List[str] = []
 
     while not done and steps < 100:
         prompt = format_prompt(obs)
@@ -75,6 +79,7 @@ def collect_rollout(env: DispatcherEnvironment, model, tokenizer, device: str = 
                 temperature=0.7,
                 top_p=0.9,
                 do_sample=True,
+                pad_token_id=tokenizer.eos_token_id,
             )
         completion = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
         completions.append(completion)
@@ -98,13 +103,19 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="Qwen/Qwen3-1.7B")
     parser.add_argument("--episodes", type=int, default=50)
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--output-dir", type=str, default="./outputs")
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--output-dir", type=str, default="./outputs/rollouts")
+    parser.add_argument("--difficulty", type=str, default="learning")
     args = parser.parse_args()
+
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     print(f"Loading model {args.model} on {args.device}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         torch_dtype=torch.bfloat16,
@@ -114,25 +125,30 @@ def main():
     if args.device == "cpu":
         model = model.to("cpu")
 
-    print(f"Model loaded. Starting {args.episodes} episodes...")
+    print(f"Model loaded. Collecting {args.episodes} rollouts...")
     env = DispatcherEnvironment(seed=42)
-    rewards = []
-
-    for ep in range(args.episodes):
-        rollout = collect_rollout(env, model, tokenizer, device=args.device)
-        rewards.append(rollout["reward"])
-        print(f"Episode {ep+1}/{args.episodes}: reward={rollout['reward']:.3f}, steps={rollout['steps']}")
-
-    print(f"\nMean reward: {sum(rewards)/len(rewards):.3f}")
-
     os.makedirs(args.output_dir, exist_ok=True)
-    with open(os.path.join(args.output_dir, "rewards.json"), "w") as f:
-        json.dump({"rewards": rewards}, f)
 
-    if not args.dry_run:
-        print(f"Saving model to {args.output_dir}")
-        model.save_pretrained(args.output_dir)
-        tokenizer.save_pretrained(args.output_dir)
+    all_rollouts = []
+    for ep in range(args.episodes):
+        if args.difficulty == "curriculum":
+            diff = env.curriculum.phase
+        else:
+            diff = args.difficulty
+        rollout = collect_rollout(env, model, tokenizer, device=args.device)
+        rollout["episode"] = ep + 1
+        rollout["difficulty"] = diff
+        all_rollouts.append(rollout)
+        if (ep + 1) % 10 == 0:
+            print(f"Episode {ep+1}/{args.episodes}: reward={rollout['reward']:.3f}, steps={rollout['steps']}")
+
+    # Save rollouts
+    with open(os.path.join(args.output_dir, "rollouts.json"), "w") as f:
+        json.dump(all_rollouts, f, indent=2)
+
+    rewards = [r["reward"] for r in all_rollouts]
+    print(f"\nMean reward: {sum(rewards)/len(rewards):.3f}")
+    print(f"Rollouts saved to {args.output_dir}/rollouts.json")
 
 
 if __name__ == "__main__":
