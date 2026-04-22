@@ -94,7 +94,7 @@ class DispatcherEnvironment(Environment):
         self.event_scheduler.reset(event_prob=phase["event_prob"])
 
         # Schedule first call with adversarial bias
-        self._next_call_step = self.call_generator._next_call_time(0)
+        self._next_call_step = self.call_generator.next_call_time(0)
 
         # Seed last known statuses with initial unit states
         for u in self.units:
@@ -160,7 +160,7 @@ class DispatcherEnvironment(Environment):
             bias = self.adversarial_designer.get_bias()
             call = self.call_generator.generate_call(self.step_count, self.city_graph.nodes(), adversarial_bias=bias)
             events.append(f"New call: {call['reported_type']} at Node {call['location']}. Caller: {call['caller_tone']}.")
-            self._next_call_step = self.call_generator._next_call_time(self.step_count)
+            self._next_call_step = self.call_generator.next_call_time(self.step_count)
 
         # Check city events
         event_alerts = self.event_scheduler.check(self.step_count)

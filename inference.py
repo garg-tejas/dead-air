@@ -4,7 +4,7 @@ import argparse
 import json
 
 from dead_air.server.dispatcher_environment import DispatcherEnvironment
-from train import collect_rollout
+from dead_air.server.rollout_utils import collect_rollout
 
 
 def main():

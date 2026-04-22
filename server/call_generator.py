@@ -35,7 +35,7 @@ class CallGenerator:
         self.panic_range = panic_range
         self.ghost_rate = ghost_rate
 
-    def _next_call_time(self, current_step: int) -> int:
+    def next_call_time(self, current_step: int) -> int:
         """Sample next call arrival via Poisson process."""
         lambdas = {"warmup": 8, "learning": 5, "advanced": 4, "expert": 3}
         lam = lambdas.get(self.difficulty, 5)
