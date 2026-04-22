@@ -1,16 +1,33 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
 """Dead Air Environment."""
 
-from .client import DeadAirEnv
-from .models import DeadAirAction, DeadAirObservation
+try:
+    from .client import EmergencyDispatcherClient
+    from .models import (
+        CallSummary,
+        DispatchAction,
+        DispatchObservation,
+        EpisodeGroundTruth,
+        HospitalStatus,
+        UnitStatus,
+    )
+except ImportError:
+    # Allow direct import during testing without package context
+    EmergencyDispatcherClient = None
+    from models import (
+        CallSummary,
+        DispatchAction,
+        DispatchObservation,
+        EpisodeGroundTruth,
+        HospitalStatus,
+        UnitStatus,
+    )
 
 __all__ = [
-    "DeadAirAction",
-    "DeadAirObservation",
-    "DeadAirEnv",
+    "DispatchAction",
+    "DispatchObservation",
+    "CallSummary",
+    "UnitStatus",
+    "HospitalStatus",
+    "EpisodeGroundTruth",
+    "EmergencyDispatcherClient",
 ]

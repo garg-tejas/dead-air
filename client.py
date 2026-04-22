@@ -1,9 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
 """Dead Air Environment Client."""
 
 from typing import Dict
@@ -12,71 +6,37 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from .models import DeadAirAction, DeadAirObservation
+from .models import DispatchAction, DispatchObservation
 
 
-class DeadAirEnv(
-    EnvClient[DeadAirAction, DeadAirObservation, State]
-):
-    """
-    Client for the Dead Air Environment.
+class EmergencyDispatcherClient(EnvClient[DispatchAction, DispatchObservation, State]):
+    """Client for the Dead Air Dispatcher Environment."""
 
-    This client maintains a persistent WebSocket connection to the environment server,
-    enabling efficient multi-step interactions with lower latency.
-    Each client instance has its own dedicated environment session on the server.
-
-    Example:
-        >>> # Connect to a running server
-        >>> with DeadAirEnv(base_url="http://localhost:8000") as client:
-        ...     result = client.reset()
-        ...     print(result.observation.echoed_message)
-        ...
-        ...     result = client.step(DeadAirAction(message="Hello!"))
-        ...     print(result.observation.echoed_message)
-
-    Example with Docker:
-        >>> # Automatically start container and connect
-        >>> client = DeadAirEnv.from_docker_image("dead_air-env:latest")
-        >>> try:
-        ...     result = client.reset()
-        ...     result = client.step(DeadAirAction(message="Test"))
-        ... finally:
-        ...     client.close()
-    """
-
-    def _step_payload(self, action: DeadAirAction) -> Dict:
-        """
-        Convert DeadAirAction to JSON payload for step message.
-
-        Args:
-            action: DeadAirAction instance
-
-        Returns:
-            Dictionary representation suitable for JSON encoding
-        """
+    def _step_payload(self, action: DispatchAction) -> Dict:
         return {
-            "message": action.message,
+            "action_type": action.action_type,
+            "unit_id": action.unit_id,
+            "call_id": action.call_id,
+            "location_node": action.location_node,
+            "hospital_id": action.hospital_id,
+            "note": action.note,
         }
 
-    def _parse_result(self, payload: Dict) -> StepResult[DeadAirObservation]:
-        """
-        Parse server response into StepResult[DeadAirObservation].
-
-        Args:
-            payload: JSON response data from server
-
-        Returns:
-            StepResult with DeadAirObservation
-        """
+    def _parse_result(self, payload: Dict) -> StepResult[DispatchObservation]:
         obs_data = payload.get("observation", {})
-        observation = DeadAirObservation(
-            echoed_message=obs_data.get("echoed_message", ""),
-            message_length=obs_data.get("message_length", 0),
+        observation = DispatchObservation(
+            unit_statuses=obs_data.get("unit_statuses", []),
+            active_calls=obs_data.get("active_calls", []),
+            traffic_alerts=obs_data.get("traffic_alerts", []),
+            hospital_statuses=obs_data.get("hospital_statuses", []),
+            recent_events=obs_data.get("recent_events", []),
+            mutual_aid_remaining=obs_data.get("mutual_aid_remaining", 0),
+            step_number=obs_data.get("step_number", 0),
+            max_steps=obs_data.get("max_steps", 80),
+            dispatch_log=obs_data.get("dispatch_log", ""),
             done=payload.get("done", False),
             reward=payload.get("reward"),
-            metadata=obs_data.get("metadata", {}),
         )
-
         return StepResult(
             observation=observation,
             reward=payload.get("reward"),
@@ -84,15 +44,6 @@ class DeadAirEnv(
         )
 
     def _parse_state(self, payload: Dict) -> State:
-        """
-        Parse server response into State object.
-
-        Args:
-            payload: JSON response from state request
-
-        Returns:
-            State object with episode_id and step_count
-        """
         return State(
             episode_id=payload.get("episode_id"),
             step_count=payload.get("step_count", 0),
