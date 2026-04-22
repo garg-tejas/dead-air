@@ -8,9 +8,11 @@ import numpy as np
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
+from .adversarial_designer import AdversarialCityDesigner
 from .call_generator import CallGenerator
 from .city_graph import CityGraph
 from .constants import COVERAGE_THRESHOLD, DEFAULT_UNITS, MAX_STEPS, MUTUAL_AID_BUDGET, NODE_ZONES
+from .curriculum import CurriculumController
 from .event_scheduler import EventScheduler
 from .hospital_model import HospitalModel
 from .log_manager import LogManager
@@ -40,11 +42,16 @@ class DispatcherEnvironment(Environment):
         self._next_call_step = 1
         self._episode_ended = False
         self._heatwave_active = 0
+        self.adversarial_designer = AdversarialCityDesigner(rng=self.rng)
+        self.curriculum = CurriculumController()
 
         self._state = State(episode_id=str(uuid4()), step_count=0)
 
     def reset(self, difficulty: str = "warmup") -> Dict[str, Any]:
         """Reset environment for a new episode."""
+        # Use curriculum-controlled difficulty if not explicitly overridden
+        if difficulty == "curriculum":
+            difficulty = self.curriculum.phase
         self.difficulty = difficulty
         self.step_count = 0
         self.mutual_aid_used = 0
@@ -56,7 +63,6 @@ class DispatcherEnvironment(Environment):
         self.units = [Unit(**u) for u in DEFAULT_UNITS]
         self.call_generator.reset(difficulty)
         self.hospital_model.reset()
-        self.event_scheduler.reset(event_prob=0.0)  # events added via curriculum later
         self.log_manager.reset()
         self.radio_buffer.reset()
         self.traffic_model.clear_accidents()
@@ -71,7 +77,13 @@ class DispatcherEnvironment(Environment):
             ghost_rate=phase["ghost_rate"],
         )
 
-        # Schedule first call
+        # Apply adversarial bias from weakness tracker
+        adversarial_bias = self.adversarial_designer.get_bias()
+
+        # Configure events from curriculum
+        self.event_scheduler.reset(event_prob=phase["event_prob"])
+
+        # Schedule first call with adversarial bias
         self._next_call_step = self.call_generator._next_call_time(0)
 
         # Initial observation
@@ -120,7 +132,8 @@ class DispatcherEnvironment(Environment):
 
         # Generate new calls if due
         if self.step_count >= self._next_call_step:
-            call = self.call_generator.generate_call(self.step_count, self.city_graph.nodes())
+            bias = self.adversarial_designer.get_bias()
+            call = self.call_generator.generate_call(self.step_count, self.city_graph.nodes(), adversarial_bias=bias)
             events.append(f"New call: {call['reported_type']} at Node {call['location']}. Caller: {call['caller_tone']}.")
             self._next_call_step = self.call_generator._next_call_time(self.step_count)
 
@@ -165,6 +178,20 @@ class DispatcherEnvironment(Environment):
                 oracle_assignments=gt["optimal_assignments"],
             )
             reward = result["episode_reward"]
+
+            # Update curriculum and adversarial designer
+            self.curriculum.record_reward(reward)
+            self.curriculum.update_phase()
+            active_event = self.event_scheduler.triggered_event
+            event_name = active_event["name"] if active_event else None
+            # Tag calls with zones for adversarial tracking
+            for call in gt["calls"]:
+                call["zone"] = NODE_ZONES.get(call["location"], "unknown")
+            self.adversarial_designer.record_episode(
+                calls=gt["calls"],
+                fatalities=result["fatalities"],
+                event_name=event_name,
+            )
 
         obs = self._build_observation(reward=reward, done=done, events=events)
         return obs
