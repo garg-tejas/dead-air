@@ -1,7 +1,7 @@
 """FastAPI application for the Dead Air Environment."""
 
 try:
-    from openenv.core.env_server.http_server import create_app
+    from openenv.core import create_app
 except Exception as e:
     raise ImportError(
         "openenv is required for the web interface. Install dependencies with:\n    uv sync\n"

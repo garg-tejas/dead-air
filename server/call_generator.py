@@ -19,12 +19,16 @@ class CallGenerator:
         self.ghost_rate = 0.0
         self.false_alarm_rate = 0.0
         self.panic_range = (1.0, 1.0)
+        self.heatwave_active = 0
+        self.caller_bias_by_zone: Dict[str, float] = {}
 
     def reset(self, difficulty: str = "warmup") -> None:
         self.call_counter = 0
         self.active_calls.clear()
         self.resolved_calls.clear()
         self.difficulty = difficulty
+        self.heatwave_active = 0
+        self.caller_bias_by_zone = {}
 
     def configure(self, false_alarm_rate: float = 0.0, panic_range: tuple = (1.0, 1.0), ghost_rate: float = 0.0) -> None:
         self.false_alarm_rate = false_alarm_rate
@@ -64,6 +68,12 @@ class CallGenerator:
         call_types = ["cardiac", "trauma", "fire"]
         weights = [0.4, 0.35, 0.25]
 
+        # Heatwave: double cardiac probability
+        if self.heatwave_active > 0:
+            weights[0] *= 2.0
+            weights = [w / sum(weights) for w in weights]
+            self.heatwave_active -= 1
+
         # Apply adversarial bias to call type
         if "cardiac" in adversarial_bias:
             weights[0] *= (1.0 + adversarial_bias["cardiac"])
@@ -92,8 +102,10 @@ class CallGenerator:
             effective_deadline = float("inf")
             severity_modifier = 0.5
 
-        # Panic modifier (hidden)
-        panic_modifier = self._sample_panic_modifier()
+        # Panic modifier (hidden) - apply per-zone bias
+        base_panic = self._sample_panic_modifier()
+        zone_bias = self.caller_bias_by_zone.get(zone, 1.0)
+        panic_modifier = base_panic * zone_bias
         caller_tone = self._panic_to_tone(panic_modifier)
 
         # Ghost calls have perfect mimicry

@@ -95,7 +95,7 @@ class EventScheduler:
                     events.append("County General forced on divert")
         elif event_name == "heatwave":
             # Increase cardiac probability for next 20 steps
-            call_generator._heatwave_active = 20
+            call_generator.heatwave_active = 20
             events.append("Heatwave active: cardiac probability doubled for 20 steps")
         elif event_name == "unit_breakdown":
             # Random unit goes out of service

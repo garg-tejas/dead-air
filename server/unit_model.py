@@ -58,6 +58,7 @@ class Unit:
         self.total_travel_time: int = 0
         self.total_distance: int = 0
         self.breakdown_timer: int = 0
+        self._delay_timer: int = 0  # reliability delay (flat tire, wrong turn)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -125,22 +126,34 @@ class Unit:
             return events
 
         if self.status == "en_route" and self.path_remaining:
-            next_node = self.path_remaining.pop(0)
-            edge_data = city_graph.graph.get_edge_data(self.location, next_node)
-            travel = edge_data.get("weight", 1) if edge_data else 1
-            self.total_travel_time += travel
-            self.total_distance += travel
-            self.location = next_node
-            if not self.path_remaining:
-                # Arrived
-                if self.current_call is not None:
-                    self.status = "on_scene"
-                    self.time_on_scene = 0
-                    events.append(f"Unit {self.unit_id} arrived at call {self.current_call}")
+            # Reliability check: chance of delay event
+            if self._delay_timer > 0:
+                self._delay_timer -= 1
+                if self._delay_timer == 0:
+                    events.append(f"Unit {self.unit_id} delay cleared, resuming")
                 else:
-                    self.status = "idle"
-                    self.target_node = None
-                    events.append(f"Unit {self.unit_id} arrived at staging location {self.location}")
+                    events.append(f"Unit {self.unit_id} delayed ({self._delay_timer} steps remaining)")
+            elif rng.random() > self.reliability:
+                # Delay event: flat tire, wrong turn, traffic jam (2-4 steps)
+                self._delay_timer = int(rng.integers(2, 5))
+                events.append(f"Unit {self.unit_id} delayed: breakdown/traffic ({self._delay_timer} steps)")
+            else:
+                next_node = self.path_remaining.pop(0)
+                edge_data = city_graph.graph.get_edge_data(self.location, next_node)
+                travel = edge_data.get("weight", 1) if edge_data else 1
+                self.total_travel_time += travel
+                self.total_distance += travel
+                self.location = next_node
+                if not self.path_remaining:
+                    # Arrived
+                    if self.current_call is not None:
+                        self.status = "on_scene"
+                        self.time_on_scene = 0
+                        events.append(f"Unit {self.unit_id} arrived at call {self.current_call}")
+                    else:
+                        self.status = "idle"
+                        self.target_node = None
+                        events.append(f"Unit {self.unit_id} arrived at staging location {self.location}")
 
         elif self.status == "on_scene":
             self.time_on_scene += 1

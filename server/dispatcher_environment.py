@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import numpy as np
 
-from openenv.core.env_server.interfaces import Environment
+from openenv.core import Environment
 from openenv.core.env_server.types import State
 
 from .adversarial_designer import AdversarialCityDesigner
@@ -37,13 +37,16 @@ class DispatcherEnvironment(Environment):
 
         self.units: List[Unit] = []
         self.mutual_aid_used = 0
+        self._mutual_aid_arrivals: List[Dict[str, Any]] = []  # countdowns for incoming aid units
         self.step_count = 0
         self.difficulty = "warmup"
         self._next_call_step = 1
         self._episode_ended = False
-        self._heatwave_active = 0
         self.adversarial_designer = AdversarialCityDesigner(rng=self.rng)
         self.curriculum = CurriculumController()
+
+        # Radio delay: track last known status per unit (unit_id -> status dict)
+        self._last_known_statuses: Dict[int, Dict[str, Any]] = {}
 
         self._state = State(episode_id=str(uuid4()), step_count=0)
 
@@ -55,8 +58,9 @@ class DispatcherEnvironment(Environment):
         self.difficulty = difficulty
         self.step_count = 0
         self.mutual_aid_used = 0
+        self._mutual_aid_arrivals.clear()
         self._episode_ended = False
-        self._heatwave_active = 0
+        self._last_known_statuses.clear()
         self._state = State(episode_id=str(uuid4()), step_count=0)
 
         # Reset subsystems
@@ -77,6 +81,12 @@ class DispatcherEnvironment(Environment):
             ghost_rate=phase["ghost_rate"],
         )
 
+        # Randomize caller bias per zone per episode
+        zones = set(NODE_ZONES.values())
+        self.call_generator.caller_bias_by_zone = {
+            z: float(self.rng.uniform(0.7, 1.3)) for z in zones
+        }
+
         # Apply adversarial bias from weakness tracker
         adversarial_bias = self.adversarial_designer.get_bias()
 
@@ -86,6 +96,10 @@ class DispatcherEnvironment(Environment):
         # Schedule first call with adversarial bias
         self._next_call_step = self.call_generator._next_call_time(0)
 
+        # Seed last known statuses with initial unit states
+        for u in self.units:
+            self._last_known_statuses[u.unit_id] = u.get_observable_status()
+
         # Initial observation
         return self._build_observation(reward=0.0)
 
@@ -94,9 +108,22 @@ class DispatcherEnvironment(Environment):
         if self._episode_ended:
             return self._build_observation(reward=0.0, done=True)
 
+        events: List[str] = []
+
+        # Verify is a free action: does not consume time or advance simulation
+        action_type = action.get("action_type", "hold")
+        if action_type == "verify":
+            cid = action.get("call_id")
+            call = self._get_call(cid)
+            if call:
+                confidence = self.call_generator.verify_call(cid)
+                events.append(f"Verified Call {cid}: {confidence} confidence")
+            else:
+                events.append(f"Invalid verify: call {cid} not found")
+            return self._build_observation(reward=None, done=False, events=events)
+
         self.step_count += 1
         self._state.step_count = self.step_count
-        events: List[str] = []
 
         # Process agent action
         action_events = self._process_action(action)
@@ -109,7 +136,6 @@ class DispatcherEnvironment(Environment):
             # Resolve calls when unit clears them
             for evt in unit_events:
                 if "cleared call" in evt:
-                    # Extract call ID from event string
                     parts = evt.split()
                     if len(parts) >= 4:
                         try:
@@ -120,11 +146,10 @@ class DispatcherEnvironment(Environment):
             # Submit status to radio buffer
             self.radio_buffer.submit(self.step_count, unit.get_observable_status())
 
-        # Release delayed radio updates
+        # Release delayed radio updates -> update last known statuses
         released = self.radio_buffer.release(self.step_count)
         for status in released:
-            # Update last known status for observation
-            pass  # Observation builder reads from units directly; buffer effect is implicit delay
+            self._last_known_statuses[status["unit_id"]] = status
 
         # Advance calls
         call_events = self.call_generator.tick(self.step_count)
@@ -152,9 +177,18 @@ class DispatcherEnvironment(Environment):
                 )
                 events.extend(event_effects)
 
-        # Decay heatwave
-        if self._heatwave_active > 0:
-            self._heatwave_active -= 1
+        # Process mutual aid arrivals
+        new_arrivals = []
+        for aid in self._mutual_aid_arrivals:
+            aid["arrival_step"] -= 1
+            if aid["arrival_step"] <= 0:
+                new_unit = Unit(**aid["unit_config"])
+                self.units.append(new_unit)
+                self._last_known_statuses[new_unit.unit_id] = new_unit.get_observable_status()
+                events.append(f"Mutual aid Unit {new_unit.unit_id} arrived and is idle")
+            else:
+                new_arrivals.append(aid)
+        self._mutual_aid_arrivals = new_arrivals
 
         # Mark fatalities for unresolved calls that exceeded deadline
         for call in self.call_generator.get_active():
@@ -241,7 +275,18 @@ class DispatcherEnvironment(Environment):
         elif action_type == "request_mutual_aid":
             if self.mutual_aid_used < MUTUAL_AID_BUDGET:
                 self.mutual_aid_used += 1
-                events.append("Mutual aid requested. External unit arriving in 6 steps.")
+                # Create external unit config, arriving in 6 steps
+                aid_unit_id = max(u.unit_id for u in self.units) + 1 if self.units else 100
+                self._mutual_aid_arrivals.append({
+                    "arrival_step": 6,
+                    "unit_config": {
+                        "unit_id": aid_unit_id,
+                        "location": 0,  # starts at downtown
+                        "speed": 1.0,
+                        "reliability": 0.90,
+                    },
+                })
+                events.append(f"Mutual aid requested. External Unit {aid_unit_id} arriving in 6 steps.")
             else:
                 events.append("Mutual aid budget exhausted")
 
@@ -263,15 +308,6 @@ class DispatcherEnvironment(Environment):
                 self.log_manager.append(note)
                 events.append(f"Log: {note[:50]}")
 
-        elif action_type == "verify":
-            cid = action.get("call_id")
-            call = self._get_call(cid)
-            if call:
-                confidence = self.call_generator.verify_call(cid)
-                events.append(f"Verified Call {cid}: {confidence} confidence")
-            else:
-                events.append(f"Invalid verify: call {cid} not found")
-
         return events
 
     def _get_unit(self, unit_id: Optional[int]) -> Optional[Unit]:
@@ -291,17 +327,18 @@ class DispatcherEnvironment(Environment):
         return None
 
     def _build_observation(self, reward: Optional[float] = None, done: bool = False, events: Optional[List[str]] = None) -> Dict[str, Any]:
-        """Build agent observation."""
+        """Build agent observation using last known statuses (radio delay applied)."""
         events = events or []
 
         unit_statuses = []
         for u in self.units:
-            s = u.get_observable_status()
+            # Use last known status from radio buffer if available, else current
+            known = self._last_known_statuses.get(u.unit_id, u.get_observable_status())
             unit_statuses.append({
-                "unit_id": s["unit_id"],
-                "last_known_location": s["last_known_location"],
-                "last_known_status": s["last_known_status"],
-                "current_call": s["current_call"],
+                "unit_id": known["unit_id"],
+                "last_known_location": known["last_known_location"],
+                "last_known_status": known["last_known_status"],
+                "current_call": known["current_call"],
                 "last_update_step": self.step_count,
             })
 
@@ -350,7 +387,7 @@ class DispatcherEnvironment(Environment):
         return {
             "calls": calls,
             "unit_reliability": {u.unit_id: u.reliability for u in self.units},
-            "caller_bias_by_zone": {z: 1.0 for z in set(NODE_ZONES.values())},  # randomized per episode
+            "caller_bias_by_zone": self.call_generator.caller_bias_by_zone,
             "hospital_capacity": {hid: h.capacity for hid, h in self.hospital_model.hospitals.items()},
             "city_event": self.event_scheduler.triggered_event,
             "optimal_assignments": oracle_assignments,
