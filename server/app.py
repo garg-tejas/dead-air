@@ -10,9 +10,16 @@ except Exception as e:
 try:
     from ..models import DispatchAction, DispatchObservation
     from .dispatcher_environment import DispatcherEnvironment
-except ModuleNotFoundError:
-    from models import DispatchAction, DispatchObservation
-    from server.dispatcher_environment import DispatcherEnvironment
+except (ModuleNotFoundError, ImportError):
+    try:
+        from models import DispatchAction, DispatchObservation
+        from server.dispatcher_environment import DispatcherEnvironment
+    except (ModuleNotFoundError, ImportError):
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from models import DispatchAction, DispatchObservation
+        from server.dispatcher_environment import DispatcherEnvironment
 
 
 app = create_app(
