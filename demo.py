@@ -84,6 +84,8 @@ def run_demo(env: DispatcherEnvironment, num_episodes: int = 3, difficulty: str 
         print(f"{'#'*60}")
 
         obs = env.reset(difficulty=difficulty)
+        # Disable radio delay for demo so greedy agent sees true status
+        env.radio_buffer.delay_prob = 0.0
         done = False
         step = 0
 

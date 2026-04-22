@@ -46,7 +46,6 @@ def main():
     parser.add_argument("--save-every", type=int, default=50)
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--max-completion-length", type=int, default=512)
-    parser.add_argument("--max-prompt-length", type=int, default=2048)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -83,7 +82,6 @@ def main():
         output_dir=args.output_dir,
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
-        max_prompt_length=args.max_prompt_length,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,
         learning_rate=args.learning_rate,

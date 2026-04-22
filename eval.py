@@ -1,6 +1,6 @@
 """Evaluation script: greedy baseline vs oracle comparison."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from dead_air.server.dispatcher_environment import DispatcherEnvironment
 
@@ -51,6 +51,8 @@ def run_episodes(
     rewards = []
     for ep in range(num_episodes):
         obs = env.reset(difficulty=difficulty)
+        # Disable radio delay for baseline evaluation so greedy agent sees true status
+        env.radio_buffer.delay_prob = 0.0
         done = False
         step_count = 0
         while not done and step_count < 100:
