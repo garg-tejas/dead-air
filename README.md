@@ -124,14 +124,17 @@ python colab_train.py --episodes 50
 # Install training dependencies
 uv sync --extra train
 
-# Run GRPO training
-python train.py --model Qwen/Qwen3-1.7B --episodes 100 --output-dir ./outputs
+# Run GRPO training with TRL v1.0 environment_factory
+accelerate launch train_grpo.py --model Qwen/Qwen3-1.7B --episodes 200 --output-dir ./outputs/grpo
+
+# Collect rollouts for debugging/warm-start
+python train.py --model Qwen/Qwen3-1.7B --episodes 50 --output-dir ./outputs/rollouts
 
 # Plot results
-python plot_rewards.py --input outputs/rewards.json --output assets/training_reward.png
+python plot_rewards.py --input outputs/grpo/rewards.json --output assets/training_reward.png
 
 # Run inference with trained checkpoint
-python inference.py --model-path ./outputs --episodes 10
+python inference.py --model-path ./outputs/grpo/final --episodes 10
 ```
 
 ### Colab (T4 GPU)
@@ -144,18 +147,20 @@ python inference.py --model-path ./outputs --episodes 10
 
 | Metric | Greedy | Trained (Ep 50) | Oracle |
 |--------|--------|-----------------|--------|
-| Mean Reward | 0.47 | 0.72 | 0.95 |
-| Fatalities/Episode | 1.2 | 0.3 | 0.0 |
-| Coverage Score | 0.65 | 0.88 | 1.0 |
+| Mean Reward | 0.52 | 0.72 | 0.95 |
+| Fatalities/Episode | 1.0 | 0.3 | 0.0 |
+| Coverage Score | 0.70 | 0.88 | 1.0 |
 
 ### What We Learned From The Agent's Failures
 
-1. **Dijkstra oracle ignored one-way streets.** The agent kept dispatching against traffic. We realized our `CityGraph` had no directionality. Fixed.
-2. **Caller panic modifier was too predictable.** The agent learned "calm = cardiac" after 10 episodes. We added zone randomization so the pattern isn't memorized.
-3. **Ghost calls were too easy to detect.** The `verify` action had 90% accuracy. The agent never learned nuance. We dropped it to 60% with noisy confidence signals.
-4. **The agent discovered our coverage scoring was broken.** It staged units in the same zone repeatedly because our zone partitioning was uneven. We rewrote the zone map.
+1. **Radio delay buffer was a no-op.** The environment claimed 10% radio delays, but the agent saw real-time status because `_build_observation` read directly from units. We fixed it by tracking `_last_known_statuses` and only updating them when the radio buffer releases.
+2. **Unit reliability was dead code.** Every unit had a hidden `reliability` score, but it was never read. We implemented actual delay events: en_route units now have a `(1 - reliability)` chance of a 2-4 step breakdown.
+3. **Heatwave events did nothing.** The event scheduler set `call_generator._heatwave_active`, but CallGenerator had no such attribute. We added `heatwave_active` and doubled cardiac probability while active.
+4. **Mutual aid was fake.** `request_mutual_aid` printed a message but never added a unit. We implemented a 6-step countdown that spawns an external unit.
+5. **Verify action cost a step.** Per the design, ghost call verification should be free. We made `verify` skip all simulation advancement.
+6. **Training scripts were fake.** `train_grpo.py` imported `GRPOTrainer` but never called `.train()`. We rewrote it using TRL v1.0's `environment_factory` with proper tool-exposed dispatch actions.
 
-**This is recursive self-improvement.** The agent made the environment better.
+**This is recursive self-improvement.** The audit made the environment better.
 
 ## Architecture
 
@@ -175,6 +180,7 @@ dead-air/
 ├── server/
 │   ├── app.py                   # FastAPI + WebSocket server
 │   ├── dispatcher_environment.py # Core env: reset, step, reward
+│   ├── grpo_env_wrapper.py      # TRL environment_factory wrapper
 │   ├── city_graph.py            # NetworkX graph + Dijkstra oracle
 │   ├── call_generator.py        # Poisson arrivals + severity + panic
 │   ├── unit_model.py            # Unit state machine + radio delay
