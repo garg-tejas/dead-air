@@ -1,0 +1,43 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openenv-dead_air"
+version = "0.1.0"
+description = "Dead Air: Emergency Dispatch RL Environment for OpenEnv"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core[core]>=0.2.2",
+    "numpy>=1.24.0",
+    "networkx>=3.0",
+    "matplotlib>=3.7.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+train = [
+    "trl>=0.29.0",
+    "transformers>=4.40.0",
+    "accelerate>=0.30.0",
+    "datasets>=2.19.0",
+    "torch>=2.2.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+server = "dead_air.server.app:main"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["dead_air", "dead_air.server"]
+package-dir = { "dead_air" = ".", "dead_air.server" = "server" }

@@ -1,0 +1,46 @@
+skills/
+.venv/
+__pycache__/
+*.egg-info/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.dylib
+*.dll
+
+# outputs
+trained_models/
+outputs/
+assets/*.gif
+assets/*.mp4
+assets/*.png
+assets/*.jpg
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# uv
+uv.lock
+
+*.md
+!README.md
