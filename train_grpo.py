@@ -91,7 +91,7 @@ def main():
         save_steps=args.save_every,
         # L4 24GB VRAM settings
         use_vllm=not args.no_vllm,
-        vllm_gpu_memory_utilization=0.7 if not args.no_vllm else None,
+        vllm_gpu_memory_utilization=0.5 if not args.no_vllm else None,
         # Reward scaling: batch-level std reduces difficulty bias
         scale_rewards="batch",
         # Disable KL penalty (standard practice in modern GRPO)
