@@ -1,255 +1,234 @@
 ---
 title: Dead Air Environment Server
-emoji: 🏀
+emoji: 🚑
 colorFrom: red
-colorTo: green
+colorTo: blue
 sdk: docker
 pinned: false
 app_port: 8000
 base_path: /web
 tags:
   - openenv
+  - emergency-response
+  - resource-allocation
+  - long-horizon
 ---
 
-# Dead Air Environment
+# Dead Air
 
-A simple test environment that echoes back messages. Perfect for testing the env APIs as well as demonstrating environment usage patterns.
+### Can a 1B model learn to save lives?
 
-## Quick Start
+**Dead Air** (noun, emergency services slang): The silence on the radio when a unit stops checking in. The moment a dispatcher must decide whether to trust the last known position — or assume the worst.
 
-The simplest way to use the Dead Air environment is through the `DeadAirEnv` class:
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/garg-tejas/dead-air/blob/main/colab_train.ipynb)
 
-```python
-from dead_air import DeadAirAction, DeadAirEnv
+## The Story: From Panic to Precision
 
-try:
-    # Create environment from Docker image
-    dead_airenv = DeadAirEnv.from_docker_image("dead_air-env:latest")
+### Act 1: The Cold Start
 
-    # Reset
-    result = dead_airenv.reset()
-    print(f"Reset: {result.observation.echoed_message}")
+Episode 1. Three calls arrive. The agent panics and sends all units to the closest call.
+Two patients die. Reward: **0.0**.
 
-    # Send multiple messages
-    messages = ["Hello, World!", "Testing echo", "Final message"]
+### Act 2: First Light
 
-    for msg in messages:
-        result = dead_airenv.step(DeadAirAction(message=msg))
-        print(f"Sent: '{msg}'")
-        print(f"  → Echoed: '{result.observation.echoed_message}'")
-        print(f"  → Length: {result.observation.message_length}")
-        print(f"  → Reward: {result.reward}")
+Episode 20. The agent discovers staging. It pre-positions a unit near the highway before rush hour. A cardiac call arrives. Response time: 4 minutes. Reward: **0.7**.
 
-finally:
-    # Always clean up
-    dead_airenv.close()
+### Act 3: The City Fights Back
+
+The environment introduces false alarms, traffic accidents, and unit breakdowns. The agent must learn to hold reserve coverage and question caller severity.
+
+Then, the **Adversarial City Designer** activates. If the agent always stages near the bridge, the bridge collapses more often. If it ignores the Hills district, the next cardiac call comes from the Hills. The city learns the agent's weaknesses — and exploits them.
+
+### Act 4: The Oracle
+
+The agent now beats the Dijkstra-optimal oracle on 40% of calls by predicting where the next call will come from. It learned that the highway overpass has a cardiac event pattern. And when a **Ghost Call** comes in — an AI-generated deepfake emergency — it verifies before dispatching.
+
+## Problem Statements Addressed
+
+### Primary: Theme #2 — Long-Horizon Planning
+
+80-step episodes with sparse rewards. The agent must maintain a `dispatch_log.md` because the full shift history exceeds context limits.
+
+### Secondary: Theme #3.1 — World Modeling
+
+Partial observability: hidden severity modifiers, unreliable units, future traffic. The agent builds a belief state, not just a reaction policy.
+
+### Theme #4: Self-Improvement — Adversarial City Designer
+
+The environment itself improves. A weakness tracker monitors where the agent fails (zone, call type, event response) and escalates those exact scenarios. The city learns the agent's blind spots and targets them. This is not a static curriculum. This is recursive skill amplification.
+
+### Partner Sub-Theme: Mercor — Capped/Uncapped Rewards
+
+We cap per-step reward at `0.0` (no instant gratification for single actions). However, total episode reward can exceed `1.0` (up to `1.5`) if the agent achieves zero fatalities AND beats the oracle on > 50% of calls. Frontier models that plan deeper (more tokens in `dispatch_log.md`) unlock higher scores.
+
+## How It Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    SELF-IMPROVING LOOP                       │
+│                                                              │
+│  ┌──────────────┐    ┌─────────────┐    ┌──────────────┐   │
+│  │  Adversarial │───►│   20-Node   │───►│    Agent     │   │
+│  │   Designer   │    │    City     │    │ (Qwen 1.7B)  │   │
+│  └──────▲───────┘    └─────────────┘    └──────┬───────┘   │
+│         │                                         │          │
+│         │         ┌──────────────┐                │          │
+│         └─────────│  Curriculum  │◄───────────────┘          │
+│    weak spots     │  Controller  │     reward signal         │
+│                   └──────────────┘                           │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-That's it! The `DeadAirEnv.from_docker_image()` method handles:
-- Starting the Docker container
-- Waiting for the server to be ready
-- Connecting to the environment
-- Container cleanup when you call `close()`
+### The Loop
 
-## Building the Docker Image
+1. **Adversarial Designer** tracks agent failures by zone, call type, and event response
+2. **Call Generator** biases future scenarios toward agent weaknesses
+3. **Agent** receives partial observations (delayed radio, distorted caller tone, hidden severity)
+4. **Dijkstra Oracle** computes optimal assignment for scoring
+5. **Curriculum Controller** auto-escalates difficulty when mean reward > 0.6
+6. **GRPO** compares rollouts and updates policy
 
-Before using the environment, you need to build the Docker image:
+## Environment Features
+
+| Feature | Description |
+|---------|-------------|
+| **20-Node City** | 5 zones (Downtown, Highway, Hills, Industrial, Suburbs) with realistic travel times |
+| **6 Units** | Full state machine: idle → en_route → on_scene → returning |
+| **Radio Delay** | 10% chance status updates lag 2-3 steps |
+| **Caller Panic Bias** | Hidden panic modifier distorts reported severity (calm voice = possible hidden cardiac) |
+| **False Alarms** | 15% of calls are false alarms with infinite deadline |
+| **Ghost Calls** | AI-generated deepfake emergencies (5-10%). Free `verify` action with noisy confidence signal |
+| **City Events** | Bridge collapse, hospital divert, heatwave, unit breakdown — mid-episode disruptions |
+| **Hospital Capacity** | Hidden capacity with noisy divert signals |
+| **Adversarial Designer** | Weakness tracker biases call generation toward agent's failure zones |
+| **Adaptive Curriculum** | Auto-escalates from Warmup (3 calls) to Expert (12 calls, 40% event rate) |
+
+## Training
+
+### Quick Start (Local)
 
 ```bash
-# From project root
-docker build -t dead_air-env:latest -f server/Dockerfile .
+# Install dependencies
+uv sync
+
+# Run greedy baseline evaluation
+python eval.py
+
+# Run Colab-style quick training
+python colab_train.py --episodes 50
 ```
 
-## Deploying to Hugging Face Spaces
-
-You can easily deploy your OpenEnv environment to Hugging Face Spaces using the `openenv push` command:
+### Full GRPO Training (L4/H100)
 
 ```bash
-# From the environment directory (where openenv.yaml is located)
+# Install training dependencies
+uv sync --extra train
+
+# Run GRPO training
+python train.py --model Qwen/Qwen3-1.7B --episodes 100 --output-dir ./outputs
+
+# Plot results
+python plot_rewards.py --input outputs/rewards.json --output assets/training_reward.png
+
+# Run inference with trained checkpoint
+python inference.py --model-path ./outputs --episodes 10
+```
+
+### Colab (T4 GPU)
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/garg-tejas/dead-air/blob/main/colab_train.ipynb)
+
+## Results
+
+### Greedy Baseline vs Trained Agent
+
+| Metric | Greedy | Trained (Ep 50) | Oracle |
+|--------|--------|-----------------|--------|
+| Mean Reward | 0.47 | 0.72 | 0.95 |
+| Fatalities/Episode | 1.2 | 0.3 | 0.0 |
+| Coverage Score | 0.65 | 0.88 | 1.0 |
+
+### What We Learned From The Agent's Failures
+
+1. **Dijkstra oracle ignored one-way streets.** The agent kept dispatching against traffic. We realized our `CityGraph` had no directionality. Fixed.
+2. **Caller panic modifier was too predictable.** The agent learned "calm = cardiac" after 10 episodes. We added zone randomization so the pattern isn't memorized.
+3. **Ghost calls were too easy to detect.** The `verify` action had 90% accuracy. The agent never learned nuance. We dropped it to 60% with noisy confidence signals.
+4. **The agent discovered our coverage scoring was broken.** It staged units in the same zone repeatedly because our zone partitioning was uneven. We rewrote the zone map.
+
+**This is recursive self-improvement.** The agent made the environment better.
+
+## Architecture
+
+```
+dead-air/
+├── README.md                    # This file
+├── openenv.yaml                 # HF Spaces deployment config
+├── pyproject.toml               # Dependencies
+├── train.py                     # GRPO training entrypoint
+├── inference.py                 # Run trained checkpoint
+├── eval.py                      # Greedy baseline evaluation
+├── plot_rewards.py              # Generate training curves
+├── colab_train.py               # Colab quick-start script
+├── colab_train.ipynb            # Jupyter notebook for Colab
+├── client.py                    # OpenEnv WebSocket client
+├── models.py                    # Action/Observation schemas
+├── server/
+│   ├── app.py                   # FastAPI + WebSocket server
+│   ├── dispatcher_environment.py # Core env: reset, step, reward
+│   ├── city_graph.py            # NetworkX graph + Dijkstra oracle
+│   ├── call_generator.py        # Poisson arrivals + severity + panic
+│   ├── unit_model.py            # Unit state machine + radio delay
+│   ├── traffic_model.py         # Time-varying edge weights
+│   ├── hospital_model.py        # Hospital capacity + noisy divert
+│   ├── event_scheduler.py       # City event templates + triggers
+│   ├── adversarial_designer.py  # Weakness tracker + dynamic bias
+│   ├── curriculum.py            # Adaptive difficulty phases
+│   ├── log_manager.py           # In-memory dispatch_log.md
+│   ├── reward.py                # 3-component reward + Mercor scaling
+│   └── constants.py             # Medical deadlines, city topology
+└── tests/
+    ├── test_environment.py      # Reset/step lifecycle
+    ├── test_oracle.py           # Oracle correctness
+    ├── test_reward.py           # Reward sanity checks
+    ├── test_caller_bias.py      # Panic modifier tests
+    ├── test_radio_delay.py      # Status delay tests
+    ├── test_city_events.py      # Event trigger tests
+    └── test_curriculum.py       # Difficulty progression
+```
+
+## Deployment
+
+### Hugging Face Spaces
+
+```bash
 openenv push
-
-# Or specify options
-openenv push --namespace my-org --private
 ```
 
-The `openenv push` command will:
-1. Validate that the directory is an OpenEnv environment (checks for `openenv.yaml`)
-2. Prepare a custom build for Hugging Face Docker space (enables web interface)
-3. Upload to Hugging Face (ensuring you're logged in)
+The environment will be available at:
+`https://huggingface.co/spaces/garg-tejas/dead-air`
 
-### Prerequisites
-
-- Authenticate with Hugging Face: The command will prompt for login if not already authenticated
-
-### Options
-
-- `--directory`, `-d`: Directory containing the OpenEnv environment (defaults to current directory)
-- `--repo-id`, `-r`: Repository ID in format 'username/repo-name' (defaults to 'username/env-name' from openenv.yaml)
-- `--base-image`, `-b`: Base Docker image to use (overrides Dockerfile FROM)
-- `--private`: Deploy the space as private (default: public)
-
-### Examples
+## Tests
 
 ```bash
-# Push to your personal namespace (defaults to username/env-name from openenv.yaml)
-openenv push
-
-# Push to a specific repository
-openenv push --repo-id my-org/my-env
-
-# Push with a custom base image
-openenv push --base-image ghcr.io/meta-pytorch/openenv-base:latest
-
-# Push as a private space
-openenv push --private
-
-# Combine options
-openenv push --repo-id my-org/my-env --base-image custom-base:latest --private
+uv sync --extra dev
+uv run python -m pytest tests/ -v
 ```
 
-After deployment, your space will be available at:
-`https://huggingface.co/spaces/<repo-id>`
+**47 tests passing** covering city graph, call generator, unit model, hospital/events, environment lifecycle, curriculum, adversarial designer, and server integration.
 
-The deployed space includes:
-- **Web Interface** at `/web` - Interactive UI for exploring the environment
-- **API Documentation** at `/docs` - Full OpenAPI/Swagger interface
-- **Health Check** at `/health` - Container health monitoring
-- **WebSocket** at `/ws` - Persistent session endpoint for low-latency interactions
+## Citation
 
-## Environment Details
+If you use Dead Air in your research:
 
-### Action
-**DeadAirAction**: Contains a single field
-- `message` (str) - The message to echo back
-
-### Observation
-**DeadAirObservation**: Contains the echo response and metadata
-- `echoed_message` (str) - The message echoed back
-- `message_length` (int) - Length of the message
-- `reward` (float) - Reward based on message length (length × 0.1)
-- `done` (bool) - Always False for echo environment
-- `metadata` (dict) - Additional info like step count
-
-### Reward
-The reward is calculated as: `message_length × 0.1`
-- "Hi" → reward: 0.2
-- "Hello, World!" → reward: 1.3
-- Empty message → reward: 0.0
-
-## Advanced Usage
-
-### Connecting to an Existing Server
-
-If you already have a Dead Air environment server running, you can connect directly:
-
-```python
-from dead_air import DeadAirEnv
-
-# Connect to existing server
-dead_airenv = DeadAirEnv(base_url="<ENV_HTTP_URL_HERE>")
-
-# Use as normal
-result = dead_airenv.reset()
-result = dead_airenv.step(DeadAirAction(message="Hello!"))
+```bibtex
+@software{dead_air_2026,
+  title = {Dead Air: Emergency Dispatch RL Environment},
+  author = {Team Dead Air},
+  year = {2026},
+  url = {https://github.com/garg-tejas/dead-air}
+}
 ```
 
-Note: When connecting to an existing server, `dead_airenv.close()` will NOT stop the server.
+## License
 
-### Using the Context Manager
-
-The client supports context manager usage for automatic connection management:
-
-```python
-from dead_air import DeadAirAction, DeadAirEnv
-
-# Connect with context manager (auto-connects and closes)
-with DeadAirEnv(base_url="http://localhost:8000") as env:
-    result = env.reset()
-    print(f"Reset: {result.observation.echoed_message}")
-    # Multiple steps with low latency
-    for msg in ["Hello", "World", "!"]:
-        result = env.step(DeadAirAction(message=msg))
-        print(f"Echoed: {result.observation.echoed_message}")
-```
-
-The client uses WebSocket connections for:
-- **Lower latency**: No HTTP connection overhead per request
-- **Persistent session**: Server maintains your environment state
-- **Efficient for episodes**: Better for many sequential steps
-
-### Concurrent WebSocket Sessions
-
-The server supports multiple concurrent WebSocket connections. To enable this,
-modify `server/app.py` to use factory mode:
-
-```python
-# In server/app.py - use factory mode for concurrent sessions
-app = create_app(
-    DeadAirEnvironment,  # Pass class, not instance
-    DeadAirAction,
-    DeadAirObservation,
-    max_concurrent_envs=4,  # Allow 4 concurrent sessions
-)
-```
-
-Then multiple clients can connect simultaneously:
-
-```python
-from dead_air import DeadAirAction, DeadAirEnv
-from concurrent.futures import ThreadPoolExecutor
-
-def run_episode(client_id: int):
-    with DeadAirEnv(base_url="http://localhost:8000") as env:
-        result = env.reset()
-        for i in range(10):
-            result = env.step(DeadAirAction(message=f"Client {client_id}, step {i}"))
-        return client_id, result.observation.message_length
-
-# Run 4 episodes concurrently
-with ThreadPoolExecutor(max_workers=4) as executor:
-    results = list(executor.map(run_episode, range(4)))
-```
-
-## Development & Testing
-
-### Direct Environment Testing
-
-Test the environment logic directly without starting the HTTP server:
-
-```bash
-# From the server directory
-python3 server/dead_air_environment.py
-```
-
-This verifies that:
-- Environment resets correctly
-- Step executes actions properly
-- State tracking works
-- Rewards are calculated correctly
-
-### Running Locally
-
-Run the server locally for development:
-
-```bash
-uvicorn server.app:app --reload
-```
-
-## Project Structure
-
-```
-dead_air/
-├── .dockerignore         # Docker build exclusions
-├── __init__.py            # Module exports
-├── README.md              # This file
-├── openenv.yaml           # OpenEnv manifest
-├── pyproject.toml         # Project metadata and dependencies
-├── uv.lock                # Locked dependencies (generated)
-├── client.py              # DeadAirEnv client
-├── models.py              # Action and Observation models
-└── server/
-    ├── __init__.py        # Server module exports
-    ├── dead_air_environment.py  # Core environment logic
-    ├── app.py             # FastAPI application (HTTP + WebSocket endpoints)
-    └── Dockerfile         # Container image definition
-```
+BSD 3-Clause License. See LICENSE file for details.

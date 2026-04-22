@@ -4,4 +4,14 @@ type: space
 runtime: fastapi
 app: server.app:app
 port: 8000
-
+emoji: 🚑
+colorFrom: red
+colorTo: blue
+tags:
+  - openenv
+  - emergency-response
+  - resource-allocation
+  - long-horizon
+  - reinforcement-learning
+  - multi-agent
+  - self-improvement
