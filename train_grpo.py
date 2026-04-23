@@ -65,7 +65,7 @@ def main():
             "TRL is required for training. Install with: uv sync --extra train"
         ) from e
 
-    # Create dummy dataset with repeated prompts.
+    # Create dummy dataset in conversational format.
     # The actual state is injected by environment.reset() each episode.
     system_prompt = (
         "You are an emergency dispatch commander for a 20-node city. "
@@ -74,8 +74,11 @@ def main():
         "request mutual aid, or hold. Minimize fatalities and response time. "
         "Think step by step before acting."
     )
+    # Conversational format required when using environment_factory
     dataset = Dataset.from_dict({
-        "prompt": [system_prompt] * args.episodes,
+        "prompt": [
+            [{"role": "system", "content": system_prompt}]
+        ] * args.episodes,
         "difficulty": [args.difficulty] * args.episodes,
     })
 

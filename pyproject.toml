@@ -19,6 +19,7 @@ dependencies = [
     "networkx>=3.0",
     "matplotlib>=3.7.0",
     "pydantic>=2.0",
+    "jmespath>=1.1.0",
 ]
 
 [project.optional-dependencies]
