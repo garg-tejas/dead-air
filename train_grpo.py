@@ -59,6 +59,11 @@ def main():
     print(f"Episodes: {args.episodes}")
     print("=" * 60)
 
+    # Auto-detect bf16 for 2x speedup on Ampere+ (L4 supports bf16)
+    import torch
+    bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    print(f"BF16 supported: {bf16}")
+
     # Imports here so script can be parsed even without TRL installed
     try:
         from trl import GRPOConfig, GRPOTrainer
@@ -114,6 +119,8 @@ def main():
         scale_rewards="batch",
         # Disable KL penalty (standard practice in modern GRPO)
         beta=0.0,
+        # bf16 mixed precision for 2x speedup on Ampere+ GPUs
+        bf16=bf16,
     )
 
     # Import wrapper inside main to avoid import errors when TRL not installed
