@@ -45,7 +45,7 @@ def main():
     parser.add_argument("--output-dir", type=str, default="./outputs/grpo")
     parser.add_argument("--save-every", type=int, default=50)
     parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-completion-length", type=int, default=1024, help="Max tokens per completion (default 1024, use 2048 for more reasoning room)")
+    parser.add_argument("--max-completion-length", type=int, default=128, help="Max tokens per completion (default 128). Actions are one line; long completions get clipped.")
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-vllm", action="store_true", help="Disable vLLM (slower but works without trl[vllm])")
@@ -73,16 +73,16 @@ def main():
         "You are an emergency dispatch commander for a 20-node city. "
         "You have 6 units and must respond to emergency calls. "
         "Minimize fatalities and response time.\n\n"
-        "AVAILABLE ACTIONS (output exactly one on the first line):\n"
-        "- dispatch(unit_id=<int>, call_id=<int>)\n"
-        "- reroute(unit_id=<int>, call_id=<int>)\n"
-        "- stage(unit_id=<int>, location_node=<int>)\n"
-        "- divert(unit_id=<int>, hospital_id=<int>)\n"
-        "- verify(call_id=<int>)\n"
-        "- request_mutual_aid()\n"
-        "- log(note=\"<text>\")\n"
-        "- hold()\n\n"
-        "Think step by step, then output ONLY the action on the first line."
+        "AVAILABLE ACTIONS (output exactly ONE line, nothing else):\n"
+        "dispatch(unit_id=1, call_id=2)\n"
+        "reroute(unit_id=0, call_id=3)\n"
+        "stage(unit_id=1, location_node=5)\n"
+        "divert(unit_id=2, hospital_id=0)\n"
+        "verify(call_id=4)\n"
+        "request_mutual_aid()\n"
+        "log(note=\"staging unit 1\")\n"
+        "hold()\n\n"
+        "Output ONLY the action. No explanation, no thinking, no markdown."
     )
     # Conversational format required when using environment_factory
     dataset = Dataset.from_dict({
