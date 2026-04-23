@@ -4,6 +4,7 @@ Exposes Dead Air dispatch actions as tools for TRL's GRPOTrainer
 with environment_factory support.
 """
 
+import json
 import re
 from typing import Any, Dict, Optional
 
@@ -88,6 +89,16 @@ class DeadAirGRPOEnv:
         text = text.strip()
         if not text:
             return {"action_type": "hold"}
+
+        # Prefer a final JSON action if one is present anywhere in the output.
+        json_matches = re.findall(r"\{[^{}]*\}", text, flags=re.DOTALL)
+        for candidate in reversed(json_matches):
+            try:
+                action = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(action, dict) and action.get("action_type"):
+                return action
 
         # Qwen3/3.5 puts reasoning first and the action at the END.
         # Look at the last non-empty line to find the actual action.
