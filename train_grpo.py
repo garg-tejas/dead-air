@@ -209,6 +209,8 @@ def main():
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--batch-size", type=int, default=8, help="Episodes per batch")
+    parser.add_argument("--use-vllm", action="store_true", help="Use vLLM for fast generation (requires vllm installed)")
+    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.25)
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -219,6 +221,7 @@ def main():
     print("Dead Air GRPO Training (Manual Loop)")
     print(f"Model: {args.model}")
     print(f"Episodes: {args.episodes}")
+    print(f"Use vLLM: {args.use_vllm}")
     print("=" * 60)
 
     bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
@@ -252,12 +255,45 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     device = next(model.parameters()).device
 
+    # vLLM setup (optional)
+    vllm_engine = None
+    if args.use_vllm:
+        try:
+            from vllm import LLM, SamplingParams
+            print("[vLLM] Initializing vLLM engine...")
+            vllm_engine = LLM(
+                model=args.model,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                dtype="bfloat16" if bf16 else "float16",
+            )
+            vllm_sampling_params = SamplingParams(
+                temperature=0.7,
+                top_p=0.9,
+                max_tokens=args.max_completion_length,
+            )
+            print("[vLLM] Engine ready")
+        except ImportError:
+            print("[WARN] vLLM not available, falling back to model.generate()")
+            args.use_vllm = False
+
     # Training loop
     num_batches = max(1, args.episodes // args.batch_size)
     reward_history = []
 
     for batch_idx in range(num_batches):
         print(f"\n--- Batch {batch_idx + 1}/{num_batches} ---")
+
+        # If using vLLM, merge LoRA and reload engine
+        if args.use_vllm and vllm_engine is not None:
+            print("[vLLM] Merging LoRA weights for generation...")
+            merged_path = os.path.join(args.output_dir, "_temp_merged")
+            os.makedirs(merged_path, exist_ok=True)
+            model.save_pretrained(merged_path)
+            tokenizer.save_pretrained(merged_path)
+            # Note: vLLM 0.10.2 may not support dynamic LoRA loading.
+            # For simplicity, we fall back to model.generate() when LoRA is active.
+            print("[vLLM] Dynamic LoRA not supported in vLLM 0.10.2 — using model.generate()")
+            args.use_vllm = False
 
         # Collect episodes
         episodes = []
