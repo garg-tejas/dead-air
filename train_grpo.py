@@ -137,7 +137,6 @@ def main() -> None:
     parser.add_argument("--output-dir", type=str, default="./outputs/grpo")
     parser.add_argument("--save-every", type=int, default=50)
     parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-prompt-length", type=int, default=2048)
     parser.add_argument("--max-completion-length", type=int, default=1536)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--temperature", type=float, default=0.6)
@@ -161,7 +160,7 @@ def main() -> None:
     parser.add_argument("--vllm-server-base-url", type=str, default=None)
     parser.add_argument("--vllm-server-timeout", type=float, default=600.0)
     parser.add_argument(
-        "--vllm-guided-decoding-regex",
+        "--vllm-structured-outputs-regex",
         type=str,
         default=ACTION_JSON_REGEX,
     )
@@ -225,7 +224,6 @@ def main() -> None:
         report_to="none",
         seed=args.seed,
         bf16=bf16,
-        max_prompt_length=args.max_prompt_length,
         max_completion_length=args.max_completion_length,
         num_generations=args.num_generations,
         temperature=args.temperature,
@@ -236,8 +234,8 @@ def main() -> None:
         generation_kwargs={
             "presence_penalty": args.presence_penalty,
             "enable_thinking": True,
-            "chat_template_kwargs": {"enable_thinking": True},
         },
+        chat_template_kwargs={"enable_thinking": True},
         use_vllm=not args.no_vllm,
         vllm_mode=args.vllm_mode,
         vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization,
@@ -247,8 +245,8 @@ def main() -> None:
         vllm_server_port=args.vllm_server_port,
         vllm_server_base_url=args.vllm_server_base_url,
         vllm_server_timeout=args.vllm_server_timeout,
-        vllm_guided_decoding_regex=(
-            args.vllm_guided_decoding_regex if not args.no_vllm else None
+        vllm_structured_outputs_regex=(
+            args.vllm_structured_outputs_regex if not args.no_vllm else None
         ),
         scale_rewards="batch",
         beta=0.0,
