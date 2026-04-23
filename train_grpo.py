@@ -45,7 +45,7 @@ def main():
     parser.add_argument("--output-dir", type=str, default="./outputs/grpo")
     parser.add_argument("--save-every", type=int, default=50)
     parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-completion-length", type=int, default=256)
+    parser.add_argument("--max-completion-length", type=int, default=1024, help="Max tokens per completion (default 1024, use 2048 for more reasoning room)")
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-vllm", action="store_true", help="Disable vLLM (slower but works without trl[vllm])")
