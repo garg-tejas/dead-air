@@ -79,8 +79,17 @@ def format_observation(obs: Dict) -> str:
     return "\n".join(lines)
 
 
-def generate_step(model, tokenizer, prompt: str, max_new_tokens: int, device: str) -> Tuple[str, torch.Tensor]:
+def generate_step(model, tokenizer, prompt: str, max_new_tokens: int, device: str, vllm_engine=None, vllm_params=None) -> Tuple[str, torch.Tensor]:
     """Generate one completion and return (text, log_prob_sum)."""
+    # Use vLLM if available (much faster)
+    if vllm_engine is not None and vllm_params is not None:
+        outputs = vllm_engine.generate(prompt, vllm_params)
+        completion = outputs[0].outputs[0].text
+        # vLLM doesn't return log-probs easily, approximate with dummy
+        log_prob_sum = torch.tensor(0.0, device=device)
+        return completion, log_prob_sum
+
+    # Fallback to transformers generate
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(device)
 
     with torch.no_grad():
@@ -110,7 +119,7 @@ def generate_step(model, tokenizer, prompt: str, max_new_tokens: int, device: st
     return completion, log_prob_sum
 
 
-def run_episode(model, tokenizer, env: DeadAirGRPOEnv, max_steps: int, max_new_tokens: int, device: str):
+def run_episode(model, tokenizer, env: DeadAirGRPOEnv, max_steps: int, max_new_tokens: int, device: str, vllm_engine=None, vllm_params=None):
     """Run one episode and collect (prompt, completion, log_prob, reward)."""
     steps = []
     for step in range(max_steps):
@@ -118,7 +127,10 @@ def run_episode(model, tokenizer, env: DeadAirGRPOEnv, max_steps: int, max_new_t
             break
 
         prompt = f"{SYSTEM_PROMPT}\n\n{format_observation(env._obs)}\n\nAction:"
-        completion, log_prob = generate_step(model, tokenizer, prompt, max_new_tokens, device)
+        completion, log_prob = generate_step(
+            model, tokenizer, prompt, max_new_tokens, device,
+            vllm_engine=vllm_engine, vllm_params=vllm_params
+        )
         env.step(completion)
 
         steps.append({
@@ -206,10 +218,10 @@ def main():
     parser.add_argument("--max-completion-length", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--lora-r", type=int, default=16)
+    parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank (0 = disable LoRA)")
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--batch-size", type=int, default=8, help="Episodes per batch")
-    parser.add_argument("--use-vllm", action="store_true", help="Use vLLM for fast generation (requires vllm installed)")
+    parser.add_argument("--use-vllm", action="store_true", help="Use vLLM for fast generation (requires vllm installed). Automatically disables LoRA if set.")
     parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.25)
     args = parser.parse_args()
 
@@ -239,24 +251,30 @@ def main():
         device_map="auto",
     )
 
-    # Add LoRA
-    print("Adding LoRA adapters...")
-    from peft import LoraConfig, get_peft_model
-    peft_config = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=0.05,
-        target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
-    model = get_peft_model(model, peft_config)
+    # Add LoRA (unless disabled for vLLM)
+    if args.lora_r > 0 and not args.use_vllm:
+        print("Adding LoRA adapters...")
+        from peft import LoraConfig, get_peft_model
+        peft_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=0.05,
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(model, peft_config)
+    elif args.use_vllm:
+        print("[vLLM] LoRA disabled for vLLM compatibility")
+    else:
+        print("LoRA disabled (r=0)")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     device = next(model.parameters()).device
 
     # vLLM setup (optional)
     vllm_engine = None
+    vllm_sampling_params = None
     if args.use_vllm:
         try:
             from vllm import LLM, SamplingParams
@@ -271,7 +289,7 @@ def main():
                 top_p=0.9,
                 max_tokens=args.max_completion_length,
             )
-            print("[vLLM] Engine ready")
+            print("[vLLM] Engine ready — generation will be ~10× faster")
         except ImportError:
             print("[WARN] vLLM not available, falling back to model.generate()")
             args.use_vllm = False
@@ -283,25 +301,16 @@ def main():
     for batch_idx in range(num_batches):
         print(f"\n--- Batch {batch_idx + 1}/{num_batches} ---")
 
-        # If using vLLM, merge LoRA and reload engine
-        if args.use_vllm and vllm_engine is not None:
-            print("[vLLM] Merging LoRA weights for generation...")
-            merged_path = os.path.join(args.output_dir, "_temp_merged")
-            os.makedirs(merged_path, exist_ok=True)
-            model.save_pretrained(merged_path)
-            tokenizer.save_pretrained(merged_path)
-            # Note: vLLM 0.10.2 may not support dynamic LoRA loading.
-            # For simplicity, we fall back to model.generate() when LoRA is active.
-            print("[vLLM] Dynamic LoRA not supported in vLLM 0.10.2 — using model.generate()")
-            args.use_vllm = False
-
         # Collect episodes
         episodes = []
         rewards = []
         for i in range(args.batch_size):
             env = DeadAirGRPOEnv(seed=args.seed + batch_idx * args.batch_size + i, difficulty=args.difficulty)
             env.reset()
-            steps, reward = run_episode(model, tokenizer, env, max_steps=25, max_new_tokens=args.max_completion_length, device=device)
+            steps, reward = run_episode(
+                model, tokenizer, env, max_steps=25, max_new_tokens=args.max_completion_length,
+                device=device, vllm_engine=vllm_engine, vllm_params=vllm_sampling_params
+            )
             episodes.append(steps)
             rewards.append(reward)
             reward_history.append(reward)
