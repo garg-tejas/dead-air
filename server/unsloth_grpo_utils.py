@@ -42,7 +42,7 @@ def generate_episode_step(
 
     # Tokenize prompts
     inputs = tokenizer(
-        prompts,
+        text=prompts,
         return_tensors="pt",
         padding=True,
         truncation=True,
@@ -162,7 +162,7 @@ def compute_grpo_loss(
     # ----- 3.  Recompute log-probs under *current* policy -----
     # Re-tokenize prompts
     prompt_inputs = tokenizer(
-        all_prompts,
+        text=all_prompts,
         return_tensors="pt",
         padding=True,
         truncation=True,
