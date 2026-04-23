@@ -72,9 +72,17 @@ def main():
     system_prompt = (
         "You are an emergency dispatch commander for a 20-node city. "
         "You have 6 units and must respond to emergency calls. "
-        "Use the available tools to dispatch units, stage them, verify suspicious calls, "
-        "request mutual aid, or hold. Minimize fatalities and response time. "
-        "Think step by step before acting."
+        "Minimize fatalities and response time.\n\n"
+        "AVAILABLE ACTIONS (output exactly one on the first line):\n"
+        "- dispatch(unit_id=<int>, call_id=<int>)\n"
+        "- reroute(unit_id=<int>, call_id=<int>)\n"
+        "- stage(unit_id=<int>, location_node=<int>)\n"
+        "- divert(unit_id=<int>, hospital_id=<int>)\n"
+        "- verify(call_id=<int>)\n"
+        "- request_mutual_aid()\n"
+        "- log(note=\"<text>\")\n"
+        "- hold()\n\n"
+        "Think step by step, then output ONLY the action on the first line."
     )
     # Conversational format required when using environment_factory
     dataset = Dataset.from_dict({

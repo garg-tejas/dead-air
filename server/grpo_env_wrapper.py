@@ -4,6 +4,7 @@ Exposes Dead Air dispatch actions as tools for TRL's GRPOTrainer
 with environment_factory support.
 """
 
+import re
 from typing import Any, Dict, Optional
 
 from .constants import MAX_STEPS
@@ -15,6 +16,9 @@ class DeadAirGRPOEnv:
 
     Each public method becomes a tool the LLM can call. The episode advances
     one step per tool call (except verify, which is free).
+
+    Also supports ``step(text)`` for raw-completion parsing (used when the
+    model outputs free-form text rather than structured tool calls).
     """
 
     def __init__(self, seed: Optional[int] = None, difficulty: str = "learning"):
@@ -53,6 +57,95 @@ class DeadAirGRPOEnv:
             self._episode_reward = self._obs["reward"]
         return "\n".join(events) if events else "Action executed."
 
+    def step(self, action_text: str) -> str:
+        """Execute one environment step from a raw text completion.
+
+        TRL's ``environment_factory`` may pass the model's completion text
+        directly to ``step()`` when tool-call parsing fails.  We parse the
+        text into an action dict and forward it to the underlying env.
+
+        Args:
+            action_text: Raw completion string from the LLM.
+
+        Returns:
+            Event summary string.
+        """
+        action = self._parse_action(action_text)
+        return self._step(action)
+
+    def _parse_action(self, text: str) -> Dict[str, Any]:
+        """Parse a raw completion into an action dict.
+
+        Supports formats like::
+
+            dispatch(unit_id=1, call_id=2)
+            hold()
+            stage(unit_id=0, location_node=5)
+            verify(call_id=3)
+
+        Unknown or malformed text falls back to ``hold()``.
+        """
+        text = text.strip()
+        if not text:
+            return {"action_type": "hold"}
+
+        # Take only the first line (ignore extra reasoning text)
+        first_line = text.splitlines()[0].strip()
+        lower = first_line.lower()
+
+        # dispatch(unit_id=1, call_id=2)
+        m = re.match(
+            r"dispatch\s*\(\s*unit_id\s*=\s*(\d+)\s*,\s*call_id\s*=\s*(\d+)\s*\)",
+            lower,
+        )
+        if m:
+            return {"action_type": "dispatch", "unit_id": int(m.group(1)), "call_id": int(m.group(2))}
+
+        # reroute(unit_id=1, call_id=2)
+        m = re.match(
+            r"reroute\s*\(\s*unit_id\s*=\s*(\d+)\s*,\s*call_id\s*=\s*(\d+)\s*\)",
+            lower,
+        )
+        if m:
+            return {"action_type": "reroute", "unit_id": int(m.group(1)), "call_id": int(m.group(2))}
+
+        # stage(unit_id=0, location_node=5)
+        m = re.match(
+            r"stage\s*\(\s*unit_id\s*=\s*(\d+)\s*,\s*location_node\s*=\s*(\d+)\s*\)",
+            lower,
+        )
+        if m:
+            return {"action_type": "stage", "unit_id": int(m.group(1)), "location_node": int(m.group(2))}
+
+        # divert(unit_id=1, hospital_id=0)
+        m = re.match(
+            r"divert\s*\(\s*unit_id\s*=\s*(\d+)\s*,\s*hospital_id\s*=\s*(\d+)\s*\)",
+            lower,
+        )
+        if m:
+            return {"action_type": "divert", "unit_id": int(m.group(1)), "hospital_id": int(m.group(2))}
+
+        # verify(call_id=3)
+        m = re.match(r"verify\s*\(\s*call_id\s*=\s*(\d+)\s*\)", lower)
+        if m:
+            return {"action_type": "verify", "call_id": int(m.group(1))}
+
+        # log(note="...")
+        m = re.match(r'log\s*\(\s*note\s*=\s*"([^"]*)"\s*\)', lower)
+        if m:
+            return {"action_type": "log", "note": m.group(1)}
+
+        # hold() or just "hold"
+        if lower.startswith("hold") or lower.startswith("wait"):
+            return {"action_type": "hold"}
+
+        # request_mutual_aid()
+        if lower.startswith("request_mutual_aid") or lower.startswith("mutual_aid"):
+            return {"action_type": "request_mutual_aid"}
+
+        # Fallback: hold
+        return {"action_type": "hold"}
+
     def _format_prompt(self, obs: Dict[str, Any]) -> str:
         """Format observation into a prompt for the LLM."""
         lines = [
@@ -84,6 +177,10 @@ class DeadAirGRPOEnv:
         lines.append("")
         lines.append("Choose your next action using the available tools.")
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Individual tool methods (used by TRL when tool-call parsing works)
+    # ------------------------------------------------------------------
 
     def dispatch(self, unit_id: int, call_id: int) -> str:
         """Dispatch an idle unit to an active call.
