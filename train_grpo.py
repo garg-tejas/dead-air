@@ -146,6 +146,32 @@ def generate_step(
     return completion, log_prob_sum
 
 
+def greedy_action(obs: Dict) -> Dict:
+    """Greedy dispatch action: send closest idle unit to highest-priority call."""
+    active_calls = obs.get("active_calls", [])
+    unit_statuses = obs.get("unit_statuses", [])
+    if not active_calls:
+        return {"action_type": "hold"}
+    priority = {"cardiac": 3, "trauma": 2, "fire": 1, "false_alarm": 0}
+    sorted_calls = sorted(
+        active_calls,
+        key=lambda c: priority.get(c.get("reported_type", "trauma"), 1),
+        reverse=True,
+    )
+    for call in sorted_calls:
+        best_unit = None
+        best_dist = float("inf")
+        for u in unit_statuses:
+            if u.get("last_known_status") == "idle":
+                dist = abs(u.get("last_known_location", 0) - call["location"])
+                if dist < best_dist:
+                    best_dist = dist
+                    best_unit = u["unit_id"]
+        if best_unit is not None:
+            return {"action_type": "dispatch", "unit_id": best_unit, "call_id": call["call_id"]}
+    return {"action_type": "hold"}
+
+
 def run_episode(
     model,
     tokenizer,
@@ -157,6 +183,7 @@ def run_episode(
     vllm_params=None,
     debug_log: List[Dict] = None,
     episode_id: int = 0,
+    epsilon: float = 0.0,
 ):
     """Run one episode and collect (prompt, completion, log_prob, reward)."""
     steps = []
@@ -165,16 +192,40 @@ def run_episode(
             break
 
         obs_text = format_observation(env._obs)
-        prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text)
-        completion, log_prob = generate_step(
-            model,
-            tokenizer,
-            prompt,
-            max_new_tokens,
-            device,
-            vllm_engine=vllm_engine,
-            vllm_params=vllm_params,
-        )
+        # Epsilon-greedy: occasionally take greedy action for exploration
+        if epsilon > 0 and np.random.rand() < epsilon and env._obs.get("active_calls"):
+            greedy_act = greedy_action(env._obs)
+            completion = json.dumps(greedy_act)
+            prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text)
+            # Compute actual log prob of greedy completion under current policy
+            full_text = prompt + completion
+            inputs_lp = tokenizer(full_text, return_tensors="pt", truncation=True, max_length=4096).to(device)
+            with torch.no_grad():
+                outputs_lp = model(**inputs_lp)
+            logits_lp = outputs_lp.logits[:, :-1, :]
+            log_probs_all_lp = F.log_softmax(logits_lp, dim=-1)
+            prompt_ids_lp = tokenizer(prompt, return_tensors="pt").input_ids[0]
+            prompt_len_lp = prompt_ids_lp.shape[0]
+            comp_len_lp = inputs_lp.input_ids.shape[1] - prompt_len_lp
+            if comp_len_lp > 0:
+                token_lps = []
+                for j in range(comp_len_lp - 1):
+                    tok_id = inputs_lp.input_ids[0, prompt_len_lp + j + 1]
+                    token_lps.append(log_probs_all_lp[0, prompt_len_lp + j, tok_id])
+                log_prob = torch.stack(token_lps).sum() if token_lps else torch.tensor(0.0, device=device)
+            else:
+                log_prob = torch.tensor(0.0, device=device)
+        else:
+            prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text)
+            completion, log_prob = generate_step(
+                model,
+                tokenizer,
+                prompt,
+                max_new_tokens,
+                device,
+                vllm_engine=vllm_engine,
+                vllm_params=vllm_params,
+            )
         env.step(completion)
 
         # Debug: log what the model generated and what action was parsed
@@ -203,8 +254,8 @@ def run_episode(
     return steps, reward
 
 
-def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2):
-    """Compute GRPO clipped surrogate loss."""
+def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_batch_size=2):
+    """Compute GRPO clipped surrogate loss (memory-efficient with micro-batching)."""
     if not episodes or not rewards:
         return torch.tensor(0.0, device=model.device, requires_grad=True)
 
@@ -213,71 +264,78 @@ def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2):
     advantages = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
 
     # Flatten all steps
-    all_prompts = []
-    all_completions = []
-    all_old_log_probs = []
-    episode_indices = []
-
+    all_steps = []
     for ep_idx, (steps, _) in enumerate(zip(episodes, rewards)):
         for step in steps:
-            all_prompts.append(step["prompt"])
-            all_completions.append(step["completion"])
-            all_old_log_probs.append(step["log_prob"])
-            episode_indices.append(ep_idx)
+            all_steps.append({
+                "prompt": step["prompt"],
+                "completion": step["completion"],
+                "old_log_prob": step["log_prob"],
+                "advantage": advantages[ep_idx].item(),
+            })
 
-    # Tokenize prompts + completions
-    full_texts = [f"{p}{c}" for p, c in zip(all_prompts, all_completions)]
-    inputs = tokenizer(
-        full_texts,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=4096,
-    ).to(model.device)
+    total_loss = torch.tensor(0.0, device=model.device)
+    num_batches = 0
 
-    # Forward pass
-    outputs = model(**inputs)
-    logits = outputs.logits[:, :-1, :]
-    log_probs_all = F.log_softmax(logits, dim=-1)
+    # Process in micro-batches to avoid OOM
+    for i in range(0, len(all_steps), micro_batch_size):
+        batch_steps = all_steps[i:i + micro_batch_size]
+        prompts = [s["prompt"] for s in batch_steps]
+        completions = [s["completion"] for s in batch_steps]
+        old_log_probs = torch.stack([s["old_log_prob"] for s in batch_steps]).to(model.device)
+        step_advantages = torch.tensor([s["advantage"] for s in batch_steps], device=model.device)
 
-    # Compute new log probs for completion tokens only
-    new_log_probs = []
-    for i in range(len(all_prompts)):
-        prompt_ids = tokenizer(all_prompts[i], return_tensors="pt").input_ids[0]
-        prompt_len = prompt_ids.shape[0]
-        total_len = inputs.input_ids.shape[1]
-        comp_len = total_len - prompt_len
+        full_texts = [f"{p}{c}" for p, c in zip(prompts, completions)]
+        inputs = tokenizer(
+            full_texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=4096,
+        ).to(model.device)
 
-        if comp_len <= 0:
-            new_log_probs.append(torch.tensor(0.0, device=model.device))
-            continue
+        outputs = model(**inputs)
+        logits = outputs.logits[:, :-1, :]
+        log_probs_all = F.log_softmax(logits, dim=-1)
 
-        token_lps = []
-        for j in range(comp_len - 1):  # -1 because logits are shifted
-            tok_id = inputs.input_ids[i, prompt_len + j + 1]
-            lp = log_probs_all[i, prompt_len + j, tok_id]
-            token_lps.append(lp)
+        new_log_probs = []
+        for j in range(len(prompts)):
+            prompt_ids = tokenizer(prompts[j], return_tensors="pt").input_ids[0]
+            prompt_len = prompt_ids.shape[0]
+            total_len = inputs.input_ids.shape[1]
+            comp_len = total_len - prompt_len
 
-        new_log_probs.append(
-            torch.stack(token_lps).sum()
-            if token_lps
-            else torch.tensor(0.0, device=model.device)
-        )
+            if comp_len <= 0:
+                new_log_probs.append(torch.tensor(0.0, device=model.device))
+                continue
 
-    new_log_probs = torch.stack(new_log_probs)
-    old_log_probs = torch.stack(all_old_log_probs).to(model.device)
+            token_lps = []
+            for k in range(comp_len - 1):
+                tok_id = inputs.input_ids[j, prompt_len + k + 1]
+                lp = log_probs_all[j, prompt_len + k, tok_id]
+                token_lps.append(lp)
 
-    # Match advantages to steps
-    step_advantages = advantages[
-        torch.tensor(episode_indices, device=model.device)
-    ]
+            new_log_probs.append(
+                torch.stack(token_lps).sum()
+                if token_lps
+                else torch.tensor(0.0, device=model.device)
+            )
 
-    # Clipped surrogate loss
-    ratio = torch.exp(new_log_probs - old_log_probs.detach())
-    clipped = torch.clamp(ratio, 1.0 - epsilon, 1.0 + epsilon)
-    loss = -torch.min(ratio * step_advantages, clipped * step_advantages).mean()
+        new_log_probs = torch.stack(new_log_probs)
 
-    return loss
+        # Clipped surrogate loss
+        ratio = torch.exp(new_log_probs - old_log_probs.detach())
+        clipped = torch.clamp(ratio, 1.0 - epsilon, 1.0 + epsilon)
+        batch_loss = -torch.min(ratio * step_advantages, clipped * step_advantages).mean()
+
+        total_loss = total_loss + batch_loss
+        num_batches += 1
+
+        # Free memory
+        del inputs, outputs, logits, log_probs_all, new_log_probs, ratio, clipped, batch_loss
+        torch.cuda.empty_cache()
+
+    return total_loss / max(1, num_batches)
 
 
 def main():
@@ -302,6 +360,9 @@ def main():
     )
     parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.25)
     parser.add_argument("--debug-file", type=str, default="./outputs/grpo/debug.json")
+    parser.add_argument("--epsilon-start", type=float, default=1.0, help="Initial epsilon for greedy warmup")
+    parser.add_argument("--epsilon-end", type=float, default=0.2, help="Final epsilon after decay")
+    parser.add_argument("--epsilon-decay-batches", type=int, default=50, help="Number of batches to decay epsilon")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -351,7 +412,7 @@ def main():
     else:
         print("LoRA disabled (r=0)")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate)
     device = next(model.parameters()).device
 
     # vLLM setup (optional)
@@ -365,6 +426,7 @@ def main():
             vllm_engine = LLM(
                 model=args.model,
                 gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_len=2048,
                 dtype="bfloat16" if bf16 else "float16",
                 trust_remote_code=True,
             )
@@ -437,6 +499,13 @@ def main():
     for batch_idx in range(num_batches):
         print(f"\n--- Batch {batch_idx + 1}/{num_batches} ---")
 
+        # Decay epsilon
+        if batch_idx < args.epsilon_decay_batches:
+            epsilon = args.epsilon_start - (args.epsilon_start - args.epsilon_end) * (batch_idx / args.epsilon_decay_batches)
+        else:
+            epsilon = args.epsilon_end
+        print(f"Epsilon: {epsilon:.2f}")
+
         # Collect episodes
         episodes = []
         rewards = []
@@ -450,13 +519,14 @@ def main():
                 model,
                 tokenizer,
                 env,
-                max_steps=25,
+                max_steps=100,
                 max_new_tokens=args.max_completion_length,
                 device=device,
                 vllm_engine=vllm_engine,
                 vllm_params=vllm_sampling_params,
                 debug_log=debug_log,
                 episode_id=batch_idx * args.batch_size + i,
+                epsilon=epsilon,
             )
             episodes.append(steps)
             rewards.append(reward)
@@ -469,7 +539,7 @@ def main():
         )
         print(
             f"Completion lengths: "
-            f"{[len(s['completion']) for ep in episodes for s in ep]}"
+            f"{[len(s['completion']) for ep in episodes for s in ep][:20]}..."
         )
 
         # Skip update if all rewards are 0 (no learning signal)

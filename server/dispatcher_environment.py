@@ -110,18 +110,6 @@ class DispatcherEnvironment(Environment):
 
         events: List[str] = []
 
-        # Verify is a free action: does not consume time or advance simulation
-        action_type = action.get("action_type", "hold")
-        if action_type == "verify":
-            cid = action.get("call_id")
-            call = self._get_call(cid)
-            if call:
-                confidence = self.call_generator.verify_call(cid)
-                events.append(f"Verified Call {cid}: {confidence} confidence")
-            else:
-                events.append(f"Invalid verify: call {cid} not found")
-            return self._build_observation(reward=None, done=False, events=events)
-
         self.step_count += 1
         self._state.step_count = self.step_count
 
@@ -260,6 +248,15 @@ class DispatcherEnvironment(Environment):
                 events.append(f"Rerouted Unit {uid} to Call {cid}")
             else:
                 events.append(f"Invalid reroute: unit {uid} not en_route")
+
+        elif action_type == "verify":
+            cid = action.get("call_id")
+            call = self._get_call(cid)
+            if call:
+                confidence = self.call_generator.verify_call(cid)
+                events.append(f"Verified Call {cid}: {confidence} confidence")
+            else:
+                events.append(f"Invalid verify: call {cid} not found")
 
         elif action_type == "stage":
             uid = action.get("unit_id")
