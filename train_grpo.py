@@ -85,10 +85,14 @@ def main():
         "Think step by step about which calls are most urgent and which units are closest. "
         "Then output the action on the LAST line and ONLY the action. No markdown, no quotes."
     )
-    # Conversational format required when using environment_factory
+    # Conversational format required when using environment_factory.
+    # Qwen3.5 chat template requires BOTH system + user messages.
     dataset = Dataset.from_dict({
         "prompt": [
-            [{"role": "system", "content": system_prompt}]
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "Dispatch units to handle the current emergency calls."},
+            ]
         ] * args.episodes,
         "difficulty": [args.difficulty] * args.episodes,
     })
