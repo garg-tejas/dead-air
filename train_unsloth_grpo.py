@@ -1,11 +1,14 @@
 """Unsloth-based GRPO training for Dead Air.
 
 Usage (on Lightning AI L4):
-    uv pip install unsloth
-    uv run python train_unsloth_grpo.py \
+    # If unsloth is in your conda env (NOT uv venv):
+    python train_unsloth_grpo.py \
         --model unsloth/Qwen3.5-2B \
         --episodes 200 \
         --batch-size 8
+
+    # If unsloth is in uv venv:
+    uv run python train_unsloth_grpo.py ...
 
 This script replaces ``train_grpo.py`` when you want 2-5x faster
 rollouts via Unsloth's optimized 4-bit kernels.  The old TRL-based
