@@ -89,9 +89,11 @@ class DeadAirGRPOEnv:
         if not text:
             return {"action_type": "hold"}
 
-        # Take only the first line (ignore extra reasoning text)
-        first_line = text.splitlines()[0].strip()
-        lower = first_line.lower()
+        # Qwen3/3.5 puts reasoning first and the action at the END.
+        # Look at the last non-empty line to find the actual action.
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        action_line = lines[-1] if lines else text.strip()
+        lower = action_line.lower()
 
         # dispatch(unit_id=1, call_id=2)
         m = re.match(
