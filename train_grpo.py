@@ -233,7 +233,6 @@ def main() -> None:
         repetition_penalty=args.repetition_penalty,
         generation_kwargs={
             "presence_penalty": args.presence_penalty,
-            "enable_thinking": True,
         },
         chat_template_kwargs={"enable_thinking": True},
         use_vllm=not args.no_vllm,
