@@ -1,272 +1,526 @@
-"""GRPO training with TRL + vLLM for Dead Air.
+"""GRPO training with manual loop for Dead Air environment.
 
-Uses TRL's built-in GRPOTrainer with ``environment_factory`` so the model can
-interact with the environment across multiple turns. The prompt and generation
-settings target Qwen 3.5 thinking models while keeping the final action easy to
-parse as compact JSON.
+Compatible with TRL >= 0.15. Uses standard transformers + PEFT.
+vLLM can be used for fast generation (disable LoRA when using vLLM).
+
+Usage:
+    python train_grpo.py --model Qwen/Qwen3.5-2B --episodes 200 --batch-size 8
+    python train_grpo.py --model Qwen/Qwen3.5-2B --episodes 200 --batch-size 8 --use-vllm --lora-r 0
 """
 
 import argparse
-import importlib.util
+import json
 import os
 import sys
-import types
-from typing import Any, List
+from typing import Dict, List, Tuple
 
-from datasets import Dataset
+import numpy as np
+import torch
+import torch.nn.functional as F
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# Env wrapper
+try:
+    from server.grpo_env_wrapper import DeadAirGRPOEnv
+except ImportError:
+    sys.path.insert(0, ".")
+    from server.grpo_env_wrapper import DeadAirGRPOEnv
 
 
-SYSTEM_PROMPT = """You are the emergency dispatch commander for a 20-node city.
-You control 6 units and must minimize fatalities, response time, and coverage gaps.
-
-Reason through the situation internally before you answer. Do not reveal your
-chain-of-thought. Your visible response must contain only one compact JSON object
-on the final line with no markdown fences and no extra commentary.
-
-Valid JSON schemas:
-{"action_type":"dispatch","unit_id":0,"call_id":1}
-{"action_type":"reroute","unit_id":0,"call_id":1}
-{"action_type":"stage","unit_id":0,"location_node":5}
-{"action_type":"divert","unit_id":0,"hospital_id":1}
-{"action_type":"verify","call_id":1}
-{"action_type":"request_mutual_aid"}
-{"action_type":"log","note":"short plain text note"}
-{"action_type":"hold"}
-
-Rules:
-- Return exactly one JSON object.
-- Use exactly the key order shown in the schema examples.
-- Use integer IDs.
-- If the best action is unclear, return {"action_type":"hold"}.
-"""
-
-ACTION_JSON_REGEX = (
-    r'(\{"action_type":"dispatch","unit_id":[0-9]+,"call_id":[0-9]+\}'
-    r'|\{"action_type":"reroute","unit_id":[0-9]+,"call_id":[0-9]+\}'
-    r'|\{"action_type":"stage","unit_id":[0-9]+,"location_node":[0-9]+\}'
-    r'|\{"action_type":"divert","unit_id":[0-9]+,"hospital_id":[0-9]+\}'
-    r'|\{"action_type":"verify","call_id":[0-9]+\}'
-    r'|\{"action_type":"request_mutual_aid"\}'
-    r'|\{"action_type":"log","note":"[^"\n]{0,120}"\}'
-    r'|\{"action_type":"hold"\})'
+SYSTEM_PROMPT = (
+    "You are an emergency dispatch commander for a 20-node city. "
+    "You have 6 units and must respond to emergency calls. "
+    "Minimize fatalities and response time.\n\n"
+    "AVAILABLE ACTIONS (respond with exactly one JSON object):\n"
+    '{"action_type":"dispatch","unit_id":0,"call_id":1}\n'
+    '{"action_type":"reroute","unit_id":0,"call_id":1}\n'
+    '{"action_type":"stage","unit_id":0,"location_node":5}\n'
+    '{"action_type":"divert","unit_id":0,"hospital_id":1}\n'
+    '{"action_type":"verify","call_id":1}\n'
+    '{"action_type":"request_mutual_aid"}\n'
+    '{"action_type":"log","note":"short plain text note"}\n'
+    '{"action_type":"hold"}\n\n'
+    "Think step by step about which calls are most urgent and which units are closest. "
+    "Then output ONLY the JSON action on the LAST line. No markdown, no quotes around the JSON."
 )
 
 
-def patch_transformers_cache_compat() -> None:
-    """Restore TRANSFORMERS_CACHE for optional dependencies expecting it."""
-    try:
-        import transformers.utils.hub as hub
-    except Exception:
-        return
+def format_observation(obs: Dict) -> str:
+    """Format env observation into prompt text."""
+    lines = [
+        "# Emergency Dispatch Commander",
+        f"Step {obs['step_number']}/{obs['max_steps']}",
+        "",
+        "## Units",
+    ]
+    for u in obs.get("unit_statuses", []):
+        call_info = f" -> Call {u['current_call']}" if u.get("current_call") else ""
+        lines.append(
+            f"- Unit {u['unit_id']}: {u['last_known_status']} at Node {u['last_known_location']}{call_info}"
+        )
+    lines.append("")
+    lines.append("## Active Calls")
+    for c in obs.get("active_calls", []):
+        assigned = f" (Unit {c['assigned_unit']})" if c.get("assigned_unit") else ""
+        lines.append(
+            f"- Call {c['call_id']}: {c['reported_type']} at Node {c['location']} ({c['caller_tone']}) elapsed={c['time_elapsed']}min{assigned}"
+        )
+    lines.append("")
+    lines.append("## Traffic & Hospitals")
+    for alert in obs.get("traffic_alerts", []):
+        lines.append(f"- {alert}")
+    for h in obs.get("hospital_statuses", []):
+        lines.append(f"- Hospital {h['hospital_id']}: {h['reported_status']}")
+    lines.append("")
+    lines.append(f"Mutual aid remaining: {obs['mutual_aid_remaining']}")
+    lines.append("")
+    lines.append("Choose your next action.")
+    return "\n".join(lines)
 
-    if not hasattr(hub, "TRANSFORMERS_CACHE"):
-        hub.TRANSFORMERS_CACHE = os.environ.get(
-            "TRANSFORMERS_CACHE",
-            os.path.expanduser("~/.cache/huggingface/transformers"),
+
+def build_chat_prompt(tokenizer, system: str, user: str) -> str:
+    """Build a chat-formatted prompt using the tokenizer's chat template."""
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    if tokenizer.chat_template is not None:
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+    # Fallback for models without chat template
+    return f"{system}\n\n{user}\n\nAssistant:"
+
+
+def generate_step(
+    model,
+    tokenizer,
+    prompt: str,
+    max_new_tokens: int,
+    device: str,
+    vllm_engine=None,
+    vllm_params=None,
+) -> Tuple[str, torch.Tensor]:
+    """Generate one completion and return (text, log_prob_sum)."""
+    # Use vLLM if available (much faster)
+    if vllm_engine is not None and vllm_params is not None:
+        outputs = vllm_engine.generate(prompt, vllm_params)
+        output = outputs[0].outputs[0]
+        completion = output.text
+        # vLLM provides cumulative_logprob (sum of all token logprobs)
+        log_prob_sum = torch.tensor(
+            output.cumulative_logprob if output.cumulative_logprob is not None else 0.0,
+            device=device,
+        )
+        return completion, log_prob_sum
+
+    # Fallback to transformers generate
+    inputs = tokenizer(
+        prompt, return_tensors="pt", truncation=True, max_length=2048
+    ).to(device)
+
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9,
+            return_dict_in_generate=True,
+            output_scores=True,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
         )
 
+    generated_ids = outputs.sequences[0, inputs.input_ids.shape[1] :]
+    completion = tokenizer.decode(generated_ids, skip_special_tokens=True)
 
-def patch_vllm_ascend_compat() -> None:
-    """Stub TRL's optional vllm_ascend import on CUDA systems."""
-    if importlib.util.find_spec("vllm_ascend") is not None:
-        return
+    # Compute log-prob of generated tokens
+    scores = torch.stack(outputs.scores, dim=1)  # [1, seq_len, vocab]
+    log_probs = F.log_softmax(scores, dim=-1)
+    token_log_probs = []
+    for i, token_id in enumerate(generated_ids):
+        token_log_probs.append(log_probs[0, i, token_id])
+    log_prob_sum = torch.stack(token_log_probs).sum()
 
-    try:
-        from vllm.distributed.device_communicators.pynccl import (
-            PyNcclCommunicator,
+    return completion, log_prob_sum
+
+
+def run_episode(
+    model,
+    tokenizer,
+    env: DeadAirGRPOEnv,
+    max_steps: int,
+    max_new_tokens: int,
+    device: str,
+    vllm_engine=None,
+    vllm_params=None,
+    debug_log: List[Dict] = None,
+    episode_id: int = 0,
+):
+    """Run one episode and collect (prompt, completion, log_prob, reward)."""
+    steps = []
+    for step_idx in range(max_steps):
+        if env._obs and env._obs.get("done"):
+            break
+
+        obs_text = format_observation(env._obs)
+        prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text)
+        completion, log_prob = generate_step(
+            model,
+            tokenizer,
+            prompt,
+            max_new_tokens,
+            device,
+            vllm_engine=vllm_engine,
+            vllm_params=vllm_params,
         )
-    except Exception:
-        class PyNcclCommunicator:  # type: ignore[no-redef]
-            pass
+        env.step(completion)
 
-    root = types.ModuleType("vllm_ascend")
-    distributed = types.ModuleType("vllm_ascend.distributed")
-    device_comms = types.ModuleType(
-        "vllm_ascend.distributed.device_communicators"
-    )
-    pyhccl = types.ModuleType(
-        "vllm_ascend.distributed.device_communicators.pyhccl"
-    )
-    pyhccl.PyHcclCommunicator = PyNcclCommunicator
+        # Debug: log what the model generated and what action was parsed
+        if debug_log is not None:
+            parsed = env._parse_action(completion)
+            debug_log.append(
+                {
+                    "episode": episode_id,
+                    "step": step_idx,
+                    "prompt": prompt,
+                    "completion": completion,
+                    "parsed_action": parsed,
+                    "log_prob": float(log_prob.cpu()) if log_prob.numel() == 1 else 0.0,
+                }
+            )
 
-    sys.modules[root.__name__] = root
-    sys.modules[distributed.__name__] = distributed
-    sys.modules[device_comms.__name__] = device_comms
-    sys.modules[pyhccl.__name__] = pyhccl
+        steps.append(
+            {
+                "prompt": prompt,
+                "completion": completion,
+                "log_prob": log_prob,
+            }
+        )
 
-
-def make_reward_func() -> Any:
-    """Return episode reward from each environment instance."""
-
-    def reward_func(environments: List[Any], **_: Any) -> List[float]:
-        rewards = []
-        for env in environments:
-            rewards.append(float(env.reward) if env.reward is not None else 0.0)
-        return rewards
-
-    return reward_func
+    reward = env.reward if env.reward is not None else 0.0
+    return steps, reward
 
 
-def build_dataset(episodes: int, difficulty: str) -> Dataset:
-    """Create the conversational dataset expected by TRL environment_factory."""
-    return Dataset.from_dict(
-        {
-            "prompt": [
-                [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": (
-                            "Review the latest city state and return the next "
-                            "dispatch action as one JSON object."
-                        ),
-                    },
-                ]
-            ]
-            * episodes,
-            "difficulty": [difficulty] * episodes,
-        }
-    )
+def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2):
+    """Compute GRPO clipped surrogate loss."""
+    if not episodes or not rewards:
+        return torch.tensor(0.0, device=model.device, requires_grad=True)
+
+    # Normalize rewards
+    rewards_t = torch.tensor(rewards, dtype=torch.float32, device=model.device)
+    advantages = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
+
+    # Flatten all steps
+    all_prompts = []
+    all_completions = []
+    all_old_log_probs = []
+    episode_indices = []
+
+    for ep_idx, (steps, _) in enumerate(zip(episodes, rewards)):
+        for step in steps:
+            all_prompts.append(step["prompt"])
+            all_completions.append(step["completion"])
+            all_old_log_probs.append(step["log_prob"])
+            episode_indices.append(ep_idx)
+
+    # Tokenize prompts + completions
+    full_texts = [f"{p}{c}" for p, c in zip(all_prompts, all_completions)]
+    inputs = tokenizer(
+        full_texts,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=4096,
+    ).to(model.device)
+
+    # Forward pass
+    outputs = model(**inputs)
+    logits = outputs.logits[:, :-1, :]
+    log_probs_all = F.log_softmax(logits, dim=-1)
+
+    # Compute new log probs for completion tokens only
+    new_log_probs = []
+    for i in range(len(all_prompts)):
+        prompt_ids = tokenizer(all_prompts[i], return_tensors="pt").input_ids[0]
+        prompt_len = prompt_ids.shape[0]
+        total_len = inputs.input_ids.shape[1]
+        comp_len = total_len - prompt_len
+
+        if comp_len <= 0:
+            new_log_probs.append(torch.tensor(0.0, device=model.device))
+            continue
+
+        token_lps = []
+        for j in range(comp_len - 1):  # -1 because logits are shifted
+            tok_id = inputs.input_ids[i, prompt_len + j + 1]
+            lp = log_probs_all[i, prompt_len + j, tok_id]
+            token_lps.append(lp)
+
+        new_log_probs.append(
+            torch.stack(token_lps).sum()
+            if token_lps
+            else torch.tensor(0.0, device=model.device)
+        )
+
+    new_log_probs = torch.stack(new_log_probs)
+    old_log_probs = torch.stack(all_old_log_probs).to(model.device)
+
+    # Match advantages to steps
+    step_advantages = advantages[
+        torch.tensor(episode_indices, device=model.device)
+    ]
+
+    # Clipped surrogate loss
+    ratio = torch.exp(new_log_probs - old_log_probs.detach())
+    clipped = torch.clamp(ratio, 1.0 - epsilon, 1.0 + epsilon)
+    loss = -torch.min(ratio * step_advantages, clipped * step_advantages).mean()
+
+    return loss
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="Qwen/Qwen3.5-2B")
     parser.add_argument("--episodes", type=int, default=200)
-    parser.add_argument("--difficulty", type=str, default="curriculum")
+    parser.add_argument("--difficulty", type=str, default="learning")
     parser.add_argument("--output-dir", type=str, default="./outputs/grpo")
     parser.add_argument("--save-every", type=int, default=50)
-    parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-completion-length", type=int, default=1536)
+    parser.add_argument("--max-completion-length", type=int, default=256)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
-    parser.add_argument("--temperature", type=float, default=0.6)
-    parser.add_argument("--top-p", type=float, default=0.95)
-    parser.add_argument("--top-k", type=int, default=20)
-    parser.add_argument("--presence-penalty", type=float, default=0.0)
-    parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--no-vllm", action="store_true")
     parser.add_argument(
-        "--vllm-mode",
-        choices=["colocate", "server"],
-        default="colocate",
+        "--lora-r", type=int, default=16, help="LoRA rank (0 = disable LoRA)"
     )
-    parser.add_argument(
-        "--vllm-gpu-memory-utilization", type=float, default=0.25
-    )
-    parser.add_argument("--vllm-tensor-parallel-size", type=int, default=1)
-    parser.add_argument("--vllm-server-host", type=str, default="0.0.0.0")
-    parser.add_argument("--vllm-server-port", type=int, default=8000)
-    parser.add_argument("--vllm-server-base-url", type=str, default=None)
-    parser.add_argument("--vllm-server-timeout", type=float, default=600.0)
-    parser.add_argument(
-        "--vllm-structured-outputs-regex",
-        type=str,
-        default=ACTION_JSON_REGEX,
-    )
-    parser.add_argument(
-        "--vllm-sleep-mode",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
-    parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=8, help="Episodes per batch")
+    parser.add_argument(
+        "--use-vllm",
+        action="store_true",
+        help="Use vLLM for fast generation. Automatically disables LoRA.",
+    )
+    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.25)
+    parser.add_argument("--debug-file", type=str, default="./outputs/grpo/debug.json")
     args = parser.parse_args()
 
+    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(args.debug_file) or ".", exist_ok=True)
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+
     print("=" * 60)
-    print("Dead Air GRPO Training")
+    print("Dead Air GRPO Training (Manual Loop)")
     print(f"Model: {args.model}")
     print(f"Episodes: {args.episodes}")
+    print(f"Use vLLM: {args.use_vllm}")
     print("=" * 60)
-
-    import torch
 
     bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     print(f"BF16 supported: {bf16}")
 
-    patch_transformers_cache_compat()
-    patch_vllm_ascend_compat()
+    # Load model
+    print("\nLoading model...")
+    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
-    try:
-        from trl import GRPOConfig, GRPOTrainer
-    except ImportError as exc:
-        raise ImportError(
-            "TRL is required. Install a Lightning-compatible TRL + vLLM stack first."
-        ) from exc
-
-    from peft import LoraConfig
-
-    try:
-        from server.grpo_env_wrapper import DeadAirGRPOEnv
-    except ImportError:
-        from dead_air.server.grpo_env_wrapper import DeadAirGRPOEnv
-
-    dataset = build_dataset(args.episodes, args.difficulty)
-    reward_func = make_reward_func()
-
-    peft_config = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=0.05,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        bias="none",
-        task_type="CAUSAL_LM",
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model,
+        torch_dtype=torch.bfloat16 if bf16 else torch.float32,
+        device_map="auto",
+        trust_remote_code=True,
     )
 
-    training_args = GRPOConfig(
-        output_dir=args.output_dir,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=8,
-        num_train_epochs=1,
-        learning_rate=args.learning_rate,
-        logging_steps=1,
-        save_steps=args.save_every,
-        report_to="none",
-        seed=args.seed,
-        bf16=bf16,
-        max_completion_length=args.max_completion_length,
-        num_generations=args.num_generations,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        top_k=args.top_k,
-        min_p=0.0,
-        repetition_penalty=args.repetition_penalty,
-        generation_kwargs={
-            "presence_penalty": args.presence_penalty,
-        },
-        chat_template_kwargs={"enable_thinking": True},
-        use_vllm=not args.no_vllm,
-        vllm_mode=args.vllm_mode,
-        vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization,
-        vllm_tensor_parallel_size=args.vllm_tensor_parallel_size,
-        vllm_enable_sleep_mode=args.vllm_sleep_mode,
-        vllm_server_host=args.vllm_server_host,
-        vllm_server_port=args.vllm_server_port,
-        vllm_server_base_url=args.vllm_server_base_url,
-        vllm_server_timeout=args.vllm_server_timeout,
-        vllm_structured_outputs_regex=(
-            args.vllm_structured_outputs_regex if not args.no_vllm else None
-        ),
-        scale_rewards="batch",
-        beta=0.0,
+    # Add LoRA (unless disabled for vLLM)
+    if args.lora_r > 0 and not args.use_vllm:
+        print("Adding LoRA adapters...")
+        from peft import LoraConfig, get_peft_model
+
+        peft_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=0.05,
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(model, peft_config)
+    elif args.use_vllm:
+        print("[vLLM] LoRA disabled for vLLM compatibility")
+    else:
+        print("LoRA disabled (r=0)")
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    device = next(model.parameters()).device
+
+    # vLLM setup (optional)
+    vllm_engine = None
+    vllm_sampling_params = None
+    if args.use_vllm:
+        try:
+            from vllm import LLM, SamplingParams
+
+            print("[vLLM] Initializing vLLM engine...")
+            vllm_engine = LLM(
+                model=args.model,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                dtype="bfloat16" if bf16 else "float16",
+                trust_remote_code=True,
+            )
+            vllm_sampling_params = SamplingParams(
+                temperature=0.7,
+                top_p=0.9,
+                max_tokens=args.max_completion_length,
+            )
+            print("[vLLM] Engine ready — generation will be ~10x faster")
+        except ImportError as e:
+            print(f"[WARN] vLLM not available ({e}), falling back to model.generate()")
+            args.use_vllm = False
+
+    # Quick sanity check: run greedy baseline to confirm env rewards are non-zero
+    print("\n--- Sanity Check: Greedy Baseline ---")
+    from dead_air.server.dispatcher_environment import DispatcherEnvironment
+
+    env_check = DispatcherEnvironment(seed=args.seed)
+    greedy_rewards = []
+    for _ in range(5):
+        obs = env_check.reset(difficulty=args.difficulty)
+        env_check.radio_buffer.delay_prob = 0.0
+        for u in env_check.units:
+            env_check._last_known_statuses[u.unit_id] = u.get_observable_status()
+        done = False
+        step_count = 0
+        while not done and step_count < 100:
+            active_calls = obs.get("active_calls", [])
+            unit_statuses = obs.get("unit_statuses", [])
+            action = {"action_type": "hold"}
+            if active_calls:
+                priority = {"cardiac": 3, "trauma": 2, "fire": 1, "false_alarm": 0}
+                sorted_calls = sorted(
+                    active_calls,
+                    key=lambda c: priority.get(c.get("reported_type", "trauma"), 1),
+                    reverse=True,
+                )
+                for call in sorted_calls:
+                    best_unit = None
+                    best_dist = float("inf")
+                    for u in unit_statuses:
+                        if u.get("last_known_status") == "idle":
+                            dist = abs(u.get("last_known_location", 0) - call["location"])
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_unit = u["unit_id"]
+                    if best_unit is not None:
+                        action = {
+                            "action_type": "dispatch",
+                            "unit_id": best_unit,
+                            "call_id": call["call_id"],
+                        }
+                        break
+            obs = env_check.step(action)
+            done = obs.get("done", False)
+            step_count += 1
+        greedy_rewards.append(obs.get("reward", 0.0) or 0.0)
+    print(
+        f"Greedy baseline rewards: {[round(r, 3) for r in greedy_rewards]}"
     )
+    print(f"Mean greedy reward: {np.mean(greedy_rewards):.3f}")
+    if np.mean(greedy_rewards) <= 0:
+        print("[WARN] Greedy baseline reward is <= 0. Environment may not produce learning signal.")
 
-    trainer = GRPOTrainer(
-        model=args.model,
-        args=training_args,
-        train_dataset=dataset,
-        reward_funcs=reward_func,
-        environment_factory=DeadAirGRPOEnv,
-        peft_config=peft_config,
-    )
+    # Training loop
+    num_batches = max(1, args.episodes // args.batch_size)
+    reward_history = []
+    debug_log = []
 
-    print("\nStarting training...")
-    trainer.train()
+    for batch_idx in range(num_batches):
+        print(f"\n--- Batch {batch_idx + 1}/{num_batches} ---")
 
+        # Collect episodes
+        episodes = []
+        rewards = []
+        for i in range(args.batch_size):
+            env = DeadAirGRPOEnv(
+                seed=args.seed + batch_idx * args.batch_size + i,
+                difficulty=args.difficulty,
+            )
+            env.reset()
+            steps, reward = run_episode(
+                model,
+                tokenizer,
+                env,
+                max_steps=25,
+                max_new_tokens=args.max_completion_length,
+                device=device,
+                vllm_engine=vllm_engine,
+                vllm_params=vllm_sampling_params,
+                debug_log=debug_log,
+                episode_id=batch_idx * args.batch_size + i,
+            )
+            episodes.append(steps)
+            rewards.append(reward)
+            reward_history.append(reward)
+
+        mean_reward = np.mean(rewards)
+        non_zero = sum(1 for r in rewards if r > 0)
+        print(
+            f"Mean reward: {mean_reward:.4f} | Non-zero: {non_zero}/{len(rewards)}"
+        )
+        print(
+            f"Completion lengths: "
+            f"{[len(s['completion']) for ep in episodes for s in ep]}"
+        )
+
+        # Skip update if all rewards are 0 (no learning signal)
+        if all(r == 0 for r in rewards):
+            print("All rewards zero — skipping update")
+            # Save debug log so we can inspect what went wrong
+            with open(args.debug_file, "w") as f:
+                json.dump(debug_log, f, indent=2)
+            continue
+
+        # GRPO update
+        loss = compute_grpo_loss(model, tokenizer, episodes, rewards)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        print(f"Loss: {loss.item():.4f}")
+
+        # Save checkpoint
+        episodes_done = (batch_idx + 1) * args.batch_size
+        if episodes_done % args.save_every == 0:
+            save_path = os.path.join(args.output_dir, f"checkpoint-{episodes_done}")
+            os.makedirs(save_path, exist_ok=True)
+            model.save_pretrained(save_path)
+            tokenizer.save_pretrained(save_path)
+            print(f"Saved checkpoint to {save_path}")
+
+    # Final save
     final_path = os.path.join(args.output_dir, "final")
     os.makedirs(final_path, exist_ok=True)
-    trainer.save_model(final_path)
-    print(f"\nFinal model saved to {final_path}")
+    model.save_pretrained(final_path)
+    tokenizer.save_pretrained(final_path)
+
+    # Save metrics
+    metrics = {
+        "rewards": [float(r) for r in reward_history],
+        "mean": float(np.mean(reward_history)),
+        "std": float(np.std(reward_history)),
+    }
+    with open(os.path.join(args.output_dir, "metrics.json"), "w") as f:
+        json.dump(metrics, f, indent=2)
+
+    # Save debug log
+    with open(args.debug_file, "w") as f:
+        json.dump(debug_log, f, indent=2)
+
+    print(f"\n{'='*60}")
+    print("TRAINING COMPLETE")
+    print(f"Mean reward: {metrics['mean']:.4f}")
+    print(f"Std reward:  {metrics['std']:.4f}")
+    print(f"Final model: {final_path}")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":
