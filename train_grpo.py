@@ -45,10 +45,12 @@ def main():
     parser.add_argument("--output-dir", type=str, default="./outputs/grpo")
     parser.add_argument("--save-every", type=int, default=50)
     parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-completion-length", type=int, default=512)
+    parser.add_argument("--max-completion-length", type=int, default=256)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-vllm", action="store_true", help="Disable vLLM (slower but works without trl[vllm])")
+    parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
+    parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -103,8 +105,19 @@ def main():
 
     # Import wrapper inside main to avoid import errors when TRL not installed
     from dead_air.server.grpo_env_wrapper import DeadAirGRPOEnv
+    from peft import LoraConfig
 
     reward_func = make_reward_func(difficulty=args.difficulty)
+
+    # LoRA config for memory-efficient fine-tuning on L4 24GB
+    peft_config = LoraConfig(
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=0.05,
+        target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
 
     trainer = GRPOTrainer(
         model=args.model,
@@ -112,6 +125,7 @@ def main():
         train_dataset=dataset,
         reward_funcs=reward_func,
         environment_factory=DeadAirGRPOEnv,
+        peft_config=peft_config,
     )
 
     print("\nStarting training...")
