@@ -147,11 +147,16 @@ def run_episodes_batched(
 ):
     """Run a batch of episodes with batched generation.
 
-    Returns (episodes, rewards) where episodes is a list of step-lists.
-    Each step dict contains:
+    Returns (episodes, rewards, trajectory) where episodes is a list of step-lists
+    and trajectory is a list of per-step dicts with human-readable prompt + completion.
+    Each step dict in episodes contains:
         - prompt_ids: torch.LongTensor (on CPU)
         - completion_ids: torch.LongTensor (on CPU)
         - old_log_prob: torch.Tensor (scalar, detached)
+    Each step dict in trajectory contains:
+        - prompt: full prompt text
+        - completion: generated completion text
+        - action_text: parsed action text (what env.step received)
     """
     batch_size = len(envs)
     for env in envs:
@@ -159,6 +164,7 @@ def run_episodes_batched(
 
     active = list(range(batch_size))
     all_episodes = [[] for _ in range(batch_size)]
+    trajectory = [[] for _ in range(batch_size)]  # human-readable
 
     model.eval()
     for step_idx in range(max_steps):
@@ -289,6 +295,15 @@ def run_episodes_batched(
                 }
             )
 
+            # Store human-readable trajectory
+            trajectory[idx].append(
+                {
+                    "prompt": prompts[i],
+                    "completion": completions[i],
+                    "action_text": completions[i],
+                }
+            )
+
         # Update active list
         active = [idx for idx in active if not envs[idx]._obs.get("done")]
 
@@ -306,7 +321,7 @@ def run_episodes_batched(
         torch.cuda.empty_cache()
 
     rewards = [env.reward if env.reward is not None else 0.0 for env in envs]
-    return all_episodes, rewards
+    return all_episodes, rewards, trajectory
 
 
 def main():
@@ -360,6 +375,13 @@ def main():
         type=int,
         default=50,
         help="Number of batches to decay epsilon",
+    )
+    parser.add_argument(
+        "--trajectory-file",
+        type=str,
+        default=None,
+        help="JSONL file to save full prompt + generated text for every step. "
+             "Useful for auditing model behaviour.",
     )
     args = parser.parse_args()
 
@@ -429,6 +451,10 @@ def main():
     num_batches = max(1, args.episodes // args.batch_size)
     reward_history = []
     loss_history = []
+    trajectory_writer = None
+    if args.trajectory_file:
+        os.makedirs(os.path.dirname(args.trajectory_file) or ".", exist_ok=True)
+        trajectory_writer = open(args.trajectory_file, "a", encoding="utf-8")
 
     try:
         for batch_idx in range(num_batches):
@@ -453,7 +479,7 @@ def main():
                 for i in range(args.batch_size)
             ]
 
-            episodes, rewards = run_episodes_batched(
+            episodes, rewards, trajectory = run_episodes_batched(
                 model,
                 tokenizer,
                 envs,
@@ -471,6 +497,26 @@ def main():
                 f"Mean reward: {mean_reward:.4f} | Non-zero: {non_zero}/{len(rewards)} | "
                 f"Total steps: {total_steps}"
             )
+
+            # Save trajectory for auditing
+            if trajectory_writer:
+                for ep_idx, (ep_steps, ep_reward) in enumerate(zip(trajectory, rewards)):
+                    for step_idx, step in enumerate(ep_steps):
+                        trajectory_writer.write(
+                            json.dumps(
+                                {
+                                    "batch": batch_idx,
+                                    "episode": batch_idx * args.batch_size + ep_idx,
+                                    "step": step_idx,
+                                    "reward": ep_reward,
+                                    "prompt": step["prompt"],
+                                    "completion": step["completion"],
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+                trajectory_writer.flush()
 
             # Skip update if all rewards are 0
             if all(r == 0 for r in rewards):
@@ -515,6 +561,9 @@ def main():
         model.save_pretrained(interrupt_path)
         tokenizer.save_pretrained(interrupt_path)
         print(f"Saved emergency checkpoint to {interrupt_path}")
+    finally:
+        if trajectory_writer:
+            trajectory_writer.close()
 
     # Final save
     final_path = os.path.join(args.output_dir, "final")
