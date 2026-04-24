@@ -79,15 +79,28 @@ def format_observation(obs: Dict) -> str:
 
 
 def build_chat_prompt(tokenizer, system: str, user: str) -> str:
-    """Build a chat-formatted prompt using the tokenizer's chat template."""
+    """Build a chat-formatted prompt using the tokenizer's chat template.
+
+    Enables thinking mode for Qwen 3/3.5 models so the model reasons before
+    outputting the final action.
+    """
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
     if tokenizer.chat_template is not None:
-        return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        try:
+            return tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                chat_template_kwargs={"enable_thinking": True},
+            )
+        except TypeError:
+            # Older tokenizers don't accept chat_template_kwargs
+            return tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
     # Fallback for models without chat template
     return f"{system}\n\n{user}\n\nAssistant:"
 
