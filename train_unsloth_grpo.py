@@ -5,7 +5,7 @@ The training loop mirrors train_grpo.py but swaps in Unsloth model loading.
 
 Usage (on Lightning AI L4):
     python train_unsloth_grpo.py \
-        --model unsloth/Qwen3.5-2B-Instruct \
+        --model unsloth/Qwen3-4B \
         --episodes 200 \
         --batch-size 8 \
         --use-4bit
@@ -316,9 +316,9 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="unsloth/Qwen3.5-2B-Instruct",
-        help="Unsloth model id (default: unsloth/Qwen3.5-2B-Instruct). "
-             "Use the -Instruct variant for text-only RL.",
+        default="unsloth/Qwen3-4B",
+        help="Unsloth model id (default: unsloth/Qwen3-4B). "
+             "Use the non-Base variant for chat/instruct RL.",
     )
     parser.add_argument("--episodes", type=int, default=200)
     parser.add_argument("--difficulty", type=str, default="learning")
