@@ -2,7 +2,7 @@
 
 import pytest
 
-from dead_air.server.city_graph import CityGraph
+from server.city_graph import CityGraph
 
 
 def test_city_graph_has_20_nodes():

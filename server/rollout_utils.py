@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any, Dict, List
 
-from dead_air.server.dispatcher_environment import DispatcherEnvironment
+from .dispatcher_environment import DispatcherEnvironment
 
 
 def format_prompt(obs: Dict[str, Any]) -> str:

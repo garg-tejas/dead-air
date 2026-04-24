@@ -2,10 +2,7 @@
 
 from typing import Any, Dict, List, Set
 
-try:
-    from dead_air.server.dispatcher_environment import DispatcherEnvironment
-except ImportError:
-    from server.dispatcher_environment import DispatcherEnvironment
+from server.dispatcher_environment import DispatcherEnvironment
 
 
 def greedy_agent_step(obs: Dict[str, Any]) -> Dict[str, Any]:
@@ -78,7 +75,9 @@ def run_episodes(
 def main():
     print("Running Greedy Baseline Evaluation...")
     env = DispatcherEnvironment(seed=42)
-    rewards = run_episodes(env, num_episodes=10, agent_type="greedy", difficulty="learning")
+    rewards = run_episodes(
+        env, num_episodes=10, agent_type="greedy", difficulty="learning"
+    )
     mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
     print(f"Mean reward over {len(rewards)} episodes: {mean_reward:.3f}")
     print(f"Rewards: {[round(r, 3) for r in rewards]}")

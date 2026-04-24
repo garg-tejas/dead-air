@@ -11,7 +11,6 @@ Usage:
 import argparse
 import json
 import os
-import sys
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -19,13 +18,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# Env wrapper
-try:
-    from server.grpo_env_wrapper import DeadAirGRPOEnv
-except ImportError:
-    sys.path.insert(0, ".")
-    from server.grpo_env_wrapper import DeadAirGRPOEnv
-
+from server.grpo_env_wrapper import DeadAirGRPOEnv
 
 SYSTEM_PROMPT = (
     "You are an emergency dispatch commander for a 20-node city. "
@@ -181,7 +174,11 @@ def greedy_action(obs: Dict) -> Dict:
                     best_dist = dist
                     best_unit = u["unit_id"]
         if best_unit is not None:
-            return {"action_type": "dispatch", "unit_id": best_unit, "call_id": call["call_id"]}
+            return {
+                "action_type": "dispatch",
+                "unit_id": best_unit,
+                "call_id": call["call_id"],
+            }
     return {"action_type": "hold"}
 
 
@@ -212,7 +209,9 @@ def run_episode(
             prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text)
             # Compute actual log prob of greedy completion under current policy
             full_text = prompt + completion
-            inputs_lp = tokenizer(full_text, return_tensors="pt", truncation=True, max_length=4096).to(device)
+            inputs_lp = tokenizer(
+                full_text, return_tensors="pt", truncation=True, max_length=4096
+            ).to(device)
             with torch.no_grad():
                 outputs_lp = model(**inputs_lp)
             logits_lp = outputs_lp.logits[:, :-1, :]
@@ -225,7 +224,11 @@ def run_episode(
                 for j in range(comp_len_lp - 1):
                     tok_id = inputs_lp.input_ids[0, prompt_len_lp + j + 1]
                     token_lps.append(log_probs_all_lp[0, prompt_len_lp + j, tok_id])
-                log_prob = torch.stack(token_lps).sum() if token_lps else torch.tensor(0.0, device=device)
+                log_prob = (
+                    torch.stack(token_lps).sum()
+                    if token_lps
+                    else torch.tensor(0.0, device=device)
+                )
             else:
                 log_prob = torch.tensor(0.0, device=device)
         else:
@@ -267,7 +270,9 @@ def run_episode(
     return steps, reward
 
 
-def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_batch_size=1):
+def compute_grpo_loss(
+    model, tokenizer, episodes, rewards, epsilon=0.2, micro_batch_size=1
+):
     """Compute GRPO clipped surrogate loss (memory-efficient with micro-batching).
 
     Calls backward() internally on each micro-batch to avoid accumulating
@@ -284,23 +289,29 @@ def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_ba
     all_steps = []
     for ep_idx, (steps, _) in enumerate(zip(episodes, rewards)):
         for step in steps:
-            all_steps.append({
-                "prompt": step["prompt"],
-                "completion": step["completion"],
-                "old_log_prob": step["log_prob"],
-                "advantage": advantages[ep_idx].item(),
-            })
+            all_steps.append(
+                {
+                    "prompt": step["prompt"],
+                    "completion": step["completion"],
+                    "old_log_prob": step["log_prob"],
+                    "advantage": advantages[ep_idx].item(),
+                }
+            )
 
     total_steps = len(all_steps)
     loss_sum = 0.0
 
     # Process in micro-batches; call backward() immediately to free graph
     for i in range(0, total_steps, micro_batch_size):
-        batch_steps = all_steps[i:i + micro_batch_size]
+        batch_steps = all_steps[i : i + micro_batch_size]
         prompts = [s["prompt"] for s in batch_steps]
         completions = [s["completion"] for s in batch_steps]
-        old_log_probs = torch.stack([s["old_log_prob"] for s in batch_steps]).to(model.device)
-        step_advantages = torch.tensor([s["advantage"] for s in batch_steps], device=model.device)
+        old_log_probs = torch.stack([s["old_log_prob"] for s in batch_steps]).to(
+            model.device
+        )
+        step_advantages = torch.tensor(
+            [s["advantage"] for s in batch_steps], device=model.device
+        )
 
         full_texts = [f"{p}{c}" for p, c in zip(prompts, completions)]
         inputs = tokenizer(
@@ -343,7 +354,9 @@ def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_ba
         # Clipped surrogate loss
         ratio = torch.exp(new_log_probs - old_log_probs.detach())
         clipped = torch.clamp(ratio, 1.0 - epsilon, 1.0 + epsilon)
-        batch_loss = -torch.min(ratio * step_advantages, clipped * step_advantages).mean()
+        batch_loss = -torch.min(
+            ratio * step_advantages, clipped * step_advantages
+        ).mean()
 
         # Scale so gradients sum correctly across all steps, then backward immediately
         scaled_loss = batch_loss / max(1, total_steps)
@@ -352,7 +365,17 @@ def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_ba
         loss_sum += batch_loss.item()
 
         # Free memory
-        del inputs, outputs, logits, log_probs_all, new_log_probs, ratio, clipped, batch_loss, scaled_loss
+        del (
+            inputs,
+            outputs,
+            logits,
+            log_probs_all,
+            new_log_probs,
+            ratio,
+            clipped,
+            batch_loss,
+            scaled_loss,
+        )
         torch.cuda.empty_cache()
 
     return loss_sum / max(1, total_steps)
@@ -380,10 +403,26 @@ def main():
     )
     parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.25)
     parser.add_argument("--debug-file", type=str, default="./outputs/grpo/debug.json")
-    parser.add_argument("--use-4bit", action="store_true", help="Load model in 4-bit quantization via bitsandbytes. Saves ~75% VRAM.")
-    parser.add_argument("--epsilon-start", type=float, default=1.0, help="Initial epsilon for greedy warmup")
-    parser.add_argument("--epsilon-end", type=float, default=0.2, help="Final epsilon after decay")
-    parser.add_argument("--epsilon-decay-batches", type=int, default=50, help="Number of batches to decay epsilon")
+    parser.add_argument(
+        "--use-4bit",
+        action="store_true",
+        help="Load model in 4-bit quantization via bitsandbytes. Saves ~75% VRAM.",
+    )
+    parser.add_argument(
+        "--epsilon-start",
+        type=float,
+        default=1.0,
+        help="Initial epsilon for greedy warmup",
+    )
+    parser.add_argument(
+        "--epsilon-end", type=float, default=0.2, help="Final epsilon after decay"
+    )
+    parser.add_argument(
+        "--epsilon-decay-batches",
+        type=int,
+        default=50,
+        help="Number of batches to decay epsilon",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -411,6 +450,7 @@ def main():
         print("[4-bit] Loading model with BitsAndBytes quantization...")
         try:
             from transformers import BitsAndBytesConfig
+
             bnb_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_compute_dtype=torch.bfloat16 if bf16 else torch.float16,
@@ -425,7 +465,9 @@ def main():
             )
             print("[4-bit] Model loaded (~75% VRAM saved)")
         except ImportError:
-            print("[WARN] bitsandbytes not installed. Install with: pip install bitsandbytes")
+            print(
+                "[WARN] bitsandbytes not installed. Install with: pip install bitsandbytes"
+            )
             print("[WARN] Falling back to standard bfloat16/float32 load")
             args.use_4bit = False
 
@@ -491,7 +533,7 @@ def main():
 
     # Quick sanity check: run greedy baseline to confirm env rewards are non-zero
     print("\n--- Sanity Check: Greedy Baseline ---")
-    from dead_air.server.dispatcher_environment import DispatcherEnvironment
+    from server.dispatcher_environment import DispatcherEnvironment
 
     env_check = DispatcherEnvironment(seed=args.seed)
     greedy_rewards = []
@@ -518,7 +560,9 @@ def main():
                     best_dist = float("inf")
                     for u in unit_statuses:
                         if u.get("last_known_status") == "idle":
-                            dist = abs(u.get("last_known_location", 0) - call["location"])
+                            dist = abs(
+                                u.get("last_known_location", 0) - call["location"]
+                            )
                             if dist < best_dist:
                                 best_dist = dist
                                 best_unit = u["unit_id"]
@@ -533,12 +577,12 @@ def main():
             done = obs.get("done", False)
             step_count += 1
         greedy_rewards.append(obs.get("reward", 0.0) or 0.0)
-    print(
-        f"Greedy baseline rewards: {[round(r, 3) for r in greedy_rewards]}"
-    )
+    print(f"Greedy baseline rewards: {[round(r, 3) for r in greedy_rewards]}")
     print(f"Mean greedy reward: {np.mean(greedy_rewards):.3f}")
     if np.mean(greedy_rewards) <= 0:
-        print("[WARN] Greedy baseline reward is <= 0. Environment may not produce learning signal.")
+        print(
+            "[WARN] Greedy baseline reward is <= 0. Environment may not produce learning signal."
+        )
 
     # Training loop
     num_batches = max(1, args.episodes // args.batch_size)
@@ -550,7 +594,9 @@ def main():
 
         # Decay epsilon
         if batch_idx < args.epsilon_decay_batches:
-            epsilon = args.epsilon_start - (args.epsilon_start - args.epsilon_end) * (batch_idx / args.epsilon_decay_batches)
+            epsilon = args.epsilon_start - (args.epsilon_start - args.epsilon_end) * (
+                batch_idx / args.epsilon_decay_batches
+            )
         else:
             epsilon = args.epsilon_end
         print(f"Epsilon: {epsilon:.2f}")
@@ -583,9 +629,7 @@ def main():
 
         mean_reward = np.mean(rewards)
         non_zero = sum(1 for r in rewards if r > 0)
-        print(
-            f"Mean reward: {mean_reward:.4f} | Non-zero: {non_zero}/{len(rewards)}"
-        )
+        print(f"Mean reward: {mean_reward:.4f} | Non-zero: {non_zero}/{len(rewards)}")
         print(
             f"Completion lengths: "
             f"{[len(s['completion']) for ep in episodes for s in ep][:20]}..."
@@ -634,12 +678,12 @@ def main():
     with open(args.debug_file, "w") as f:
         json.dump(debug_log, f, indent=2)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("TRAINING COMPLETE")
     print(f"Mean reward: {metrics['mean']:.4f}")
     print(f"Std reward:  {metrics['std']:.4f}")
     print(f"Final model: {final_path}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":

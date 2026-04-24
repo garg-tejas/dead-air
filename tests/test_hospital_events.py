@@ -2,8 +2,8 @@
 
 import pytest
 
-from dead_air.server.event_scheduler import EventScheduler
-from dead_air.server.hospital_model import Hospital, HospitalModel
+from server.event_scheduler import EventScheduler
+from server.hospital_model import Hospital, HospitalModel
 
 
 def test_hospital_capacity_hidden():
@@ -33,6 +33,7 @@ def test_hospital_model_has_three_hospitals():
 
 def test_event_scheduler_may_trigger():
     import numpy as np
+
     rng = np.random.default_rng(42)
     es = EventScheduler(rng=rng)
     es.reset(event_prob=1.0)
@@ -42,6 +43,7 @@ def test_event_scheduler_may_trigger():
 
 def test_event_scheduler_no_trigger():
     import numpy as np
+
     rng = np.random.default_rng(42)
     es = EventScheduler(rng=rng)
     es.reset(event_prob=0.0)
@@ -50,6 +52,7 @@ def test_event_scheduler_no_trigger():
 
 def test_event_check_at_trigger_step():
     import numpy as np
+
     rng = np.random.default_rng(42)
     es = EventScheduler(rng=rng)
     es.reset(event_prob=1.0)
@@ -60,6 +63,7 @@ def test_event_check_at_trigger_step():
 
 def test_event_not_triggered_before():
     import numpy as np
+
     rng = np.random.default_rng(42)
     es = EventScheduler(rng=rng)
     es.reset(event_prob=1.0)

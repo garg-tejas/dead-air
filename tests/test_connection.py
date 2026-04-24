@@ -2,8 +2,8 @@
 
 import pytest
 
-from dead_air.server.app import app
-from dead_air.server.dispatcher_environment import DispatcherEnvironment
+from server.app import app
+from server.dispatcher_environment import DispatcherEnvironment
 
 
 def test_server_app_exists():
@@ -40,7 +40,9 @@ def test_environment_with_dispatch():
             break
     if obs and obs.get("active_calls"):
         call = obs["active_calls"][0]
-        obs = env.step({"action_type": "dispatch", "unit_id": 0, "call_id": call["call_id"]})
+        obs = env.step(
+            {"action_type": "dispatch", "unit_id": 0, "call_id": call["call_id"]}
+        )
         assert any("Dispatched" in e for e in obs["recent_events"])
 
 

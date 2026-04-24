@@ -12,8 +12,8 @@ import argparse
 import json
 import os
 
-from dead_air.server.dispatcher_environment import DispatcherEnvironment
-from dead_air.server.rollout_utils import collect_rollout
+from server.dispatcher_environment import DispatcherEnvironment
+from server.rollout_utils import collect_rollout
 
 
 def main():
@@ -57,14 +57,16 @@ def main():
         rollout["difficulty"] = diff
         all_rollouts.append(rollout)
         if (ep + 1) % 10 == 0:
-            print(f"Episode {ep+1}/{args.episodes}: reward={rollout['reward']:.3f}, steps={rollout['steps']}")
+            print(
+                f"Episode {ep + 1}/{args.episodes}: reward={rollout['reward']:.3f}, steps={rollout['steps']}"
+            )
 
     # Save rollouts
     with open(os.path.join(args.output_dir, "rollouts.json"), "w") as f:
         json.dump(all_rollouts, f, indent=2)
 
     rewards = [r["reward"] for r in all_rollouts]
-    print(f"\nMean reward: {sum(rewards)/len(rewards):.3f}")
+    print(f"\nMean reward: {sum(rewards) / len(rewards):.3f}")
     print(f"Rollouts saved to {args.output_dir}/rollouts.json")
 
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from dead_air.server.dispatcher_environment import DispatcherEnvironment
+from server.dispatcher_environment import DispatcherEnvironment
 
 
 def test_environment_reset():

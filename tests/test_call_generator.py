@@ -2,7 +2,7 @@
 
 import pytest
 
-from dead_air.server.call_generator import CallGenerator
+from server.call_generator import CallGenerator
 
 
 def test_call_generator_creates_calls():

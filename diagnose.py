@@ -9,7 +9,7 @@ import argparse
 import json
 from typing import Any, Dict, List
 
-from dead_air.server.dispatcher_environment import DispatcherEnvironment
+from server.dispatcher_environment import DispatcherEnvironment
 
 
 def greedy_action(obs: Dict[str, Any]) -> Dict[str, Any]:
@@ -19,7 +19,9 @@ def greedy_action(obs: Dict[str, Any]) -> Dict[str, Any]:
     if not calls:
         return {"action_type": "hold"}
     priority = {"cardiac": 3, "trauma": 2, "fire": 1, "false_alarm": 0}
-    sorted_calls = sorted(calls, key=lambda c: priority.get(c.get("reported_type"), 1), reverse=True)
+    sorted_calls = sorted(
+        calls, key=lambda c: priority.get(c.get("reported_type"), 1), reverse=True
+    )
     target = sorted_calls[0]
     best_unit = None
     best_dist = float("inf")
@@ -30,13 +32,18 @@ def greedy_action(obs: Dict[str, Any]) -> Dict[str, Any]:
                 best_dist = dist
                 best_unit = u["unit_id"]
     if best_unit is not None:
-        return {"action_type": "dispatch", "unit_id": best_unit, "call_id": target["call_id"]}
+        return {
+            "action_type": "dispatch",
+            "unit_id": best_unit,
+            "call_id": target["call_id"],
+        }
     return {"action_type": "hold"}
 
 
 def random_action(obs: Dict[str, Any], rng) -> Dict[str, Any]:
     """Random valid action."""
     import numpy as np
+
     calls = obs.get("active_calls", [])
     units = obs.get("unit_statuses", [])
     idle_units = [u for u in units if u.get("last_known_status") == "idle"]
@@ -44,14 +51,26 @@ def random_action(obs: Dict[str, Any], rng) -> Dict[str, Any]:
     if calls and idle_units:
         for c in calls:
             for u in idle_units:
-                choices.append({"action_type": "dispatch", "unit_id": u["unit_id"], "call_id": c["call_id"]})
+                choices.append(
+                    {
+                        "action_type": "dispatch",
+                        "unit_id": u["unit_id"],
+                        "call_id": c["call_id"],
+                    }
+                )
     if rng.random() < 0.05 and calls:
         choices.append({"action_type": "verify", "call_id": calls[0]["call_id"]})
     return choices[rng.integers(0, len(choices))]
 
 
-def run_diagnostic(env: DispatcherEnvironment, num_episodes: int = 10, agent_type: str = "greedy", seed: int = 42) -> List[Dict]:
+def run_diagnostic(
+    env: DispatcherEnvironment,
+    num_episodes: int = 10,
+    agent_type: str = "greedy",
+    seed: int = 42,
+) -> List[Dict]:
     import numpy as np
+
     rng = np.random.default_rng(seed)
     logs = []
 
@@ -82,17 +101,19 @@ def run_diagnostic(env: DispatcherEnvironment, num_episodes: int = 10, agent_typ
 
         reward = obs.get("reward", 0.0) or 0.0
         gt = env.get_ground_truth()
-        logs.append({
-            "episode": ep + 1,
-            "steps": step,
-            "reward": reward,
-            "fatalities": gt["fatality_count"],
-            "calls_total": len(gt["calls"]),
-            "calls_resolved": sum(1 for c in gt["calls"] if c["resolved"]),
-            "action_histogram": _histogram(episode_actions),
-            "event_histogram": _histogram_events(episode_events),
-            "last_10_events": episode_events[-10:],
-        })
+        logs.append(
+            {
+                "episode": ep + 1,
+                "steps": step,
+                "reward": reward,
+                "fatalities": gt["fatality_count"],
+                "calls_total": len(gt["calls"]),
+                "calls_resolved": sum(1 for c in gt["calls"] if c["resolved"]),
+                "action_histogram": _histogram(episode_actions),
+                "event_histogram": _histogram_events(episode_events),
+                "last_10_events": episode_events[-10:],
+            }
+        )
 
     return logs
 
@@ -126,30 +147,36 @@ def _histogram_events(events: List[str]) -> Dict[str, int]:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=10)
-    parser.add_argument("--agent", type=str, default="greedy", choices=["greedy", "random"])
+    parser.add_argument(
+        "--agent", type=str, default="greedy", choices=["greedy", "random"]
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=str, default="diagnose.json")
     args = parser.parse_args()
 
     env = DispatcherEnvironment(seed=args.seed)
-    logs = run_diagnostic(env, num_episodes=args.episodes, agent_type=args.agent, seed=args.seed)
+    logs = run_diagnostic(
+        env, num_episodes=args.episodes, agent_type=args.agent, seed=args.seed
+    )
 
     rewards = [l["reward"] for l in logs]
     fatalities = [l["fatalities"] for l in logs]
     print("=" * 60)
     print(f"DIAGNOSTIC: {args.agent} agent, {args.episodes} episodes")
     print("=" * 60)
-    print(f"Mean reward:    {sum(rewards)/len(rewards):.3f}")
+    print(f"Mean reward:    {sum(rewards) / len(rewards):.3f}")
     print(f"Reward range:   {min(rewards):.3f} - {max(rewards):.3f}")
-    print(f"Mean fatalities:{sum(fatalities)/len(fatalities):.2f}")
+    print(f"Mean fatalities:{sum(fatalities) / len(fatalities):.2f}")
     print(f"Max fatalities: {max(fatalities)}")
     print()
 
     for log in logs:
-        print(f"Ep {log['episode']:2d} | Reward: {log['reward']:.3f} | Steps: {log['steps']:2d} | "
-              f"Calls: {log['calls_resolved']}/{log['calls_total']} | Fatalities: {log['fatalities']}")
+        print(
+            f"Ep {log['episode']:2d} | Reward: {log['reward']:.3f} | Steps: {log['steps']:2d} | "
+            f"Calls: {log['calls_resolved']}/{log['calls_total']} | Fatalities: {log['fatalities']}"
+        )
         print(f"       Actions: {log['action_histogram']}")
-        if log['event_histogram']:
+        if log["event_histogram"]:
             print(f"       Events:  {log['event_histogram']}")
         print()
 

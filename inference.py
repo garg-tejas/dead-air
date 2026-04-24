@@ -3,8 +3,8 @@
 import argparse
 import json
 
-from dead_air.server.dispatcher_environment import DispatcherEnvironment
-from dead_air.server.rollout_utils import collect_rollout
+from server.dispatcher_environment import DispatcherEnvironment
+from server.rollout_utils import collect_rollout
 
 
 def main():
@@ -34,12 +34,16 @@ def main():
     for ep in range(args.episodes):
         env.reset(difficulty=args.difficulty)
         rollout = collect_rollout(env, model, tokenizer, device=args.device)
-        results.append({
-            "episode": ep + 1,
-            "reward": rollout["reward"],
-            "steps": rollout["steps"],
-        })
-        print(f"Episode {ep+1}: reward={rollout['reward']:.3f}, steps={rollout['steps']}")
+        results.append(
+            {
+                "episode": ep + 1,
+                "reward": rollout["reward"],
+                "steps": rollout["steps"],
+            }
+        )
+        print(
+            f"Episode {ep + 1}: reward={rollout['reward']:.3f}, steps={rollout['steps']}"
+        )
 
     with open(args.output, "w") as f:
         json.dump(results, f, indent=2)
