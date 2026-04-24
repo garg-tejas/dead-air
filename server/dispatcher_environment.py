@@ -465,6 +465,7 @@ class DispatcherEnvironment(Environment):
                 "is_false_alarm": c["is_false_alarm"],
                 "is_ghost": c["is_ghost"],
                 "time_elapsed": c["time_elapsed"],
+                "time_received": c.get("time_received", 0),
                 "resolved": c["resolved"],
                 "fatality": c.get("fatality", False),
             })
