@@ -383,6 +383,23 @@ class DispatcherEnvironment(Environment):
     def state(self) -> State:
         return self._state
 
+    def _compute_coverage(self, units) -> float:
+        """Check if every zone has a unit within COVERAGE_THRESHOLD minutes."""
+        zones = set(NODE_ZONES.values())
+        if not zones:
+            return 1.0
+        covered_zones = set()
+        for zone in zones:
+            zone_nodes = [n for n, z in NODE_ZONES.items() if z == zone]
+            for unit in units:
+                if unit.status == "out_of_service":
+                    continue
+                for zn in zone_nodes:
+                    if self.city_graph.travel_time(unit.location, zn) <= COVERAGE_THRESHOLD:
+                        covered_zones.add(zone)
+                        break
+        return len(covered_zones) / len(zones)
+
     def get_ground_truth(self) -> Dict[str, Any]:
         """Reveal ground truth at episode end."""
         calls = []
