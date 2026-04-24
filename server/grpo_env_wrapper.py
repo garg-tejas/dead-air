@@ -291,6 +291,18 @@ class DeadAirGRPOEnv:
         return self._episode_reward
 
     @property
+    def metrics(self) -> Optional[Dict[str, Any]]:
+        """Episode metrics dict (available after episode ends).
+
+        Includes keys:
+        - valid_action_rate, invalid_action_rate, hold_rate, dispatch_rate
+        - avg_response_time, calls_missed, fatality_count
+        """
+        if self._episode_reward is None:
+            return None
+        return self._env.get_ground_truth()
+
+    @property
     def env(self) -> DispatcherEnvironment:
         """Access the underlying environment."""
         return self._env

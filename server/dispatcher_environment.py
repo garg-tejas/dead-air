@@ -54,6 +54,15 @@ class DispatcherEnvironment(Environment):
         # Per-step coverage accumulator (time-averaged coverage score)
         self._covered_steps = 0
 
+        # Step-level validity tracking (anti-hacking / action quality)
+        self._valid_action_count = 0
+        self._invalid_action_count = 0
+        self._hold_count = 0
+        self._dispatch_count = 0
+
+        # Response-time tracking per call
+        self._call_first_dispatch_step: Dict[int, int] = {}
+
         self._state = State(episode_id=str(uuid4()), step_count=0)
 
     def reset(self, difficulty: str = "warmup") -> Dict[str, Any]:
@@ -108,6 +117,13 @@ class DispatcherEnvironment(Environment):
         # Reset per-step coverage accumulator
         self._covered_steps = 0
 
+        # Reset validity tracking
+        self._valid_action_count = 0
+        self._invalid_action_count = 0
+        self._hold_count = 0
+        self._dispatch_count = 0
+        self._call_first_dispatch_step = {}
+
         # Seed last known statuses with initial unit states
         for u in self.units:
             self._last_known_statuses[u.unit_id] = u.get_observable_status()
@@ -128,6 +144,23 @@ class DispatcherEnvironment(Environment):
         # Process agent action
         action_events = self._process_action(action)
         events.extend(action_events)
+
+        # Track action validity for anti-hacking metrics
+        action_type = action.get("action_type", "hold")
+        has_invalid = any(str(e).startswith("Invalid") for e in action_events)
+        if has_invalid:
+            self._invalid_action_count += 1
+        elif action_type == "hold":
+            self._hold_count += 1
+        elif action_type == "dispatch" and not has_invalid:
+            self._valid_action_count += 1
+            self._dispatch_count += 1
+            # Track first dispatch time per call
+            cid = action.get("call_id")
+            if cid is not None and cid not in self._call_first_dispatch_step:
+                self._call_first_dispatch_step[cid] = self.step_count
+        elif action_type in ("reroute", "stage", "divert", "request_mutual_aid", "verify", "log"):
+            self._valid_action_count += 1
 
         # Advance units
         for unit in self.units:
@@ -221,6 +254,23 @@ class DispatcherEnvironment(Environment):
             )
             reward = result["episode_reward"]
 
+            # Apply action-validity shaping (anti-hacking layer)
+            # Valid actions are rewarded; invalid actions and excessive holding are penalized
+            total_actions = self._valid_action_count + self._invalid_action_count + self._hold_count
+            if total_actions > 0:
+                validity_bonus = (self._valid_action_count / total_actions) * 0.05
+                invalidity_penalty = (self._invalid_action_count / total_actions) * 0.05
+                idle_penalty = (self._hold_count / total_actions) * 0.02
+                reward = reward + validity_bonus - invalidity_penalty - idle_penalty
+                reward = max(0.0, min(1.0, reward))
+
+            # Attach step-level metrics to result for inspection
+            result["validity_bonus"] = validity_bonus if total_actions > 0 else 0.0
+            result["invalidity_penalty"] = invalidity_penalty if total_actions > 0 else 0.0
+            result["idle_penalty"] = idle_penalty if total_actions > 0 else 0.0
+            result["valid_action_rate"] = self._valid_action_count / total_actions if total_actions > 0 else 0.0
+            result["dispatch_rate"] = self._dispatch_count / total_actions if total_actions > 0 else 0.0
+
             # Update curriculum and adversarial designer
             self.curriculum.record_reward(reward)
             self.curriculum.update_phase()
@@ -282,12 +332,13 @@ class DispatcherEnvironment(Environment):
             uid = action.get("unit_id")
             loc = action.get("location_node")
             unit = self._get_unit(uid)
-            if unit and unit.is_available() and loc is not None:
+            valid_node = loc is not None and loc in self.city_graph.nodes()
+            if unit and unit.is_available() and valid_node:
                 path = self.city_graph.path(unit.location, loc)
                 unit.stage(loc, path)
                 events.append(f"Staged Unit {uid} to Node {loc}")
             else:
-                events.append(f"Invalid stage: unit {uid} unavailable or no location")
+                events.append(f"Invalid stage: unit {uid} unavailable or invalid location {loc}")
 
         elif action_type == "request_mutual_aid":
             if self.mutual_aid_used < MUTUAL_AID_BUDGET:
@@ -426,6 +477,16 @@ class DispatcherEnvironment(Environment):
             ],
         )
 
+        # Compute average response time (first dispatch to call)
+        response_times = []
+        for c in calls:
+            if not c.get("is_false_alarm", False) and not c.get("is_ghost", False):
+                cid = c["call_id"]
+                if cid in self._call_first_dispatch_step:
+                    response_times.append(self._call_first_dispatch_step[cid] - c["time_received"])
+
+        total_actions = self._valid_action_count + self._invalid_action_count + self._hold_count
+
         return {
             "calls": calls,
             "unit_reliability": {u.unit_id: u.reliability for u in self.units},
@@ -434,4 +495,11 @@ class DispatcherEnvironment(Environment):
             "city_event": self.event_scheduler.triggered_event,
             "optimal_assignments": oracle_assignments,
             "fatality_count": sum(1 for c in calls if c.get("fatality", False)),
+            # Step-level action quality metrics (for monitoring / judging)
+            "valid_action_rate": self._valid_action_count / total_actions if total_actions > 0 else 0.0,
+            "invalid_action_rate": self._invalid_action_count / total_actions if total_actions > 0 else 0.0,
+            "hold_rate": self._hold_count / total_actions if total_actions > 0 else 0.0,
+            "dispatch_rate": self._dispatch_count / total_actions if total_actions > 0 else 0.0,
+            "avg_response_time": sum(response_times) / len(response_times) if response_times else 0.0,
+            "calls_missed": sum(1 for c in calls if not c.get("resolved", False) and c.get("fatality", False)),
         }
