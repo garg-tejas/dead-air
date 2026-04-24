@@ -254,7 +254,7 @@ def run_episode(
     return steps, reward
 
 
-def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_batch_size=2):
+def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_batch_size=1):
     """Compute GRPO clipped surrogate loss (memory-efficient with micro-batching)."""
     if not episodes or not rewards:
         return torch.tensor(0.0, device=model.device, requires_grad=True)
@@ -291,7 +291,7 @@ def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_ba
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=4096,
+            max_length=1024,
         ).to(model.device)
 
         outputs = model(**inputs)
@@ -360,6 +360,7 @@ def main():
     )
     parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.25)
     parser.add_argument("--debug-file", type=str, default="./outputs/grpo/debug.json")
+    parser.add_argument("--use-4bit", action="store_true", help="Load model in 4-bit quantization via bitsandbytes. Saves ~75% VRAM.")
     parser.add_argument("--epsilon-start", type=float, default=1.0, help="Initial epsilon for greedy warmup")
     parser.add_argument("--epsilon-end", type=float, default=0.2, help="Final epsilon after decay")
     parser.add_argument("--epsilon-decay-batches", type=int, default=50, help="Number of batches to decay epsilon")
@@ -386,12 +387,35 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        torch_dtype=torch.bfloat16 if bf16 else torch.float32,
-        device_map="auto",
-        trust_remote_code=True,
-    )
+    if args.use_4bit:
+        print("[4-bit] Loading model with BitsAndBytes quantization...")
+        try:
+            from transformers import BitsAndBytesConfig
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.bfloat16 if bf16 else torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                args.model,
+                quantization_config=bnb_config,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+            print("[4-bit] Model loaded (~75% VRAM saved)")
+        except ImportError:
+            print("[WARN] bitsandbytes not installed. Install with: pip install bitsandbytes")
+            print("[WARN] Falling back to standard bfloat16/float32 load")
+            args.use_4bit = False
+
+    if not args.use_4bit:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            torch_dtype=torch.bfloat16 if bf16 else torch.float32,
+            device_map="auto",
+            trust_remote_code=True,
+        )
 
     # Add LoRA (unless disabled for vLLM)
     if args.lora_r > 0 and not args.use_vllm:
@@ -551,6 +575,7 @@ def main():
             continue
 
         # GRPO update
+        torch.cuda.empty_cache()
         loss = compute_grpo_loss(model, tokenizer, episodes, rewards)
         loss.backward()
         optimizer.step()
