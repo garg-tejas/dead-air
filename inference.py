@@ -1,53 +1,238 @@
-"""Run inference with a trained checkpoint."""
+"""Run inference with a trained checkpoint.
+
+Uses the same prompt format and stepping logic as train_grpo.py.
+
+Usage:
+    python inference.py --model-path ./outputs/grpo/final --episodes 10 --difficulty expert
+    python inference.py --model-path Qwen/Qwen3.5-2B --episodes 5 --difficulty learning
+"""
 
 import argparse
 import json
+import os
+from typing import Dict, List, Optional
 
-from server.dispatcher_environment import DispatcherEnvironment
-from server.rollout_utils import collect_rollout
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from server.grpo_env_wrapper import DeadAirGRPOEnv
+
+SYSTEM_PROMPT = (
+    "You are an emergency dispatch commander for a 20-node city. "
+    "You have 6 units and must respond to emergency calls. "
+    "Minimize fatalities and response time.\n\n"
+    "AVAILABLE ACTIONS (respond with exactly one JSON object):\n"
+    '{"action_type":"dispatch","unit_id":0,"call_id":1}\n'
+    '{"action_type":"reroute","unit_id":0,"call_id":1}\n'
+    '{"action_type":"stage","unit_id":0,"location_node":5}\n'
+    '{"action_type":"divert","unit_id":0,"hospital_id":1}\n'
+    '{"action_type":"verify","call_id":1}\n'
+    '{"action_type":"request_mutual_aid"}\n'
+    '{"action_type":"log","note":"short plain text note"}\n'
+    '{"action_type":"hold"}\n\n'
+    "Think step by step about which calls are most urgent and which units are closest. "
+    "Then output ONLY the JSON action on the LAST line. No markdown, no quotes around the JSON."
+)
+
+
+def format_observation(obs: Dict) -> str:
+    """Format env observation into prompt text (same as train_grpo.py)."""
+    lines = [
+        "# Emergency Dispatch Commander",
+        f"Step {obs['step_number']}/{obs['max_steps']}",
+        "",
+        "## Units",
+    ]
+    for u in obs.get("unit_statuses", []):
+        call_info = f" -> Call {u['current_call']}" if u.get("current_call") else ""
+        lines.append(
+            f"- Unit {u['unit_id']}: {u['last_known_status']} at Node {u['last_known_location']}{call_info}"
+        )
+    lines.append("")
+    lines.append("## Active Calls")
+    for c in obs.get("active_calls", []):
+        assigned = f" (Unit {c['assigned_unit']})" if c.get("assigned_unit") else ""
+        lines.append(
+            f"- Call {c['call_id']}: {c['reported_type']} at Node {c['location']} ({c['caller_tone']}) elapsed={c['time_elapsed']}min{assigned}"
+        )
+    lines.append("")
+    lines.append("## Traffic & Hospitals")
+    for alert in obs.get("traffic_alerts", []):
+        lines.append(f"- {alert}")
+    for h in obs.get("hospital_statuses", []):
+        lines.append(f"- Hospital {h['hospital_id']}: {h['reported_status']}")
+    lines.append("")
+    lines.append(f"Mutual aid remaining: {obs['mutual_aid_remaining']}")
+    lines.append("")
+    lines.append("Choose your next action.")
+    return "\n".join(lines)
+
+
+def build_chat_prompt(tokenizer, system: str, user: str) -> str:
+    """Build a chat-formatted prompt using the tokenizer's chat template.
+
+    Enables thinking mode for Qwen 3/3.5 models.
+    """
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    if tokenizer.chat_template is not None:
+        try:
+            return tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                chat_template_kwargs={"enable_thinking": True},
+            )
+        except TypeError:
+            return tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+    return f"{system}\n\n{user}\n\nAssistant:"
+
+
+def generate_action(
+    model, tokenizer, prompt: str, max_new_tokens: int, device: str
+) -> str:
+    """Generate one completion from a prompt."""
+    inputs = tokenizer(
+        prompt, return_tensors="pt", truncation=True, max_length=2048
+    ).to(device)
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+    completion = tokenizer.decode(
+        outputs[0][inputs.input_ids.shape[1] :], skip_special_tokens=True
+    )
+    return completion
+
+
+def run_episode(
+    env: DeadAirGRPOEnv,
+    model,
+    tokenizer,
+    max_steps: int,
+    max_new_tokens: int,
+    device: str,
+    episode_id: int = 0,
+) -> Dict:
+    """Run one episode and collect detailed results."""
+    env.reset()
+    steps_data = []
+    for step_idx in range(max_steps):
+        if env._obs and env._obs.get("done"):
+            break
+
+        obs_text = format_observation(env._obs)
+        prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text)
+        completion = generate_action(model, tokenizer, prompt, max_new_tokens, device)
+
+        # Step the environment (wrapper parses completion internally)
+        result = env.step(completion)
+
+        # Parse what action was actually taken
+        parsed = env._parse_action(completion)
+
+        steps_data.append(
+            {
+                "step": step_idx,
+                "prompt": prompt,
+                "completion": completion,
+                "parsed_action": parsed,
+                "events": result,
+            }
+        )
+
+    reward = env.reward if env.reward is not None else 0.0
+    metrics = env.metrics
+
+    return {
+        "episode": episode_id,
+        "reward": reward,
+        "steps": len(steps_data),
+        "metrics": metrics,
+        "trajectory": steps_data,
+    }
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model-path", type=str, required=True)
-    parser.add_argument("--episodes", type=int, default=5)
-    parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--output", type=str, default="inference_results.json")
-    parser.add_argument("--difficulty", type=str, default="expert")
+    parser = argparse.ArgumentParser(
+        description="Run inference with a trained Dead Air checkpoint"
+    )
+    parser.add_argument(
+        "--model-path", type=str, required=True, help="Path to trained checkpoint or HF model ID"
+    )
+    parser.add_argument("--episodes", type=int, default=5, help="Number of episodes to run")
+    parser.add_argument("--device", type=str, default="cuda", help="Device for inference")
+    parser.add_argument("--output", type=str, default="inference_results.json", help="Output JSON path")
+    parser.add_argument(
+        "--difficulty", type=str, default="expert", help="Difficulty phase: warmup, learning, advanced, expert"
+    )
+    parser.add_argument(
+        "--max-new-tokens", type=int, default=512, help="Max tokens per generation"
+    )
+    parser.add_argument(
+        "--max-steps", type=int, default=80, help="Max steps per episode"
+    )
     args = parser.parse_args()
-
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     print(f"Loading model from {args.model_path}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     model = AutoModelForCausalLM.from_pretrained(
         args.model_path,
         torch_dtype=torch.bfloat16,
         device_map="auto" if args.device == "cuda" else None,
         trust_remote_code=True,
     )
+    if args.device == "cpu":
+        model = model.to("cpu")
+    model.eval()
 
-    env = DispatcherEnvironment(seed=42)
+    print(f"Model loaded. Running {args.episodes} episodes at difficulty '{args.difficulty}'...")
     results = []
 
     for ep in range(args.episodes):
-        env.reset(difficulty=args.difficulty)
-        rollout = collect_rollout(env, model, tokenizer, device=args.device)
-        results.append(
-            {
-                "episode": ep + 1,
-                "reward": rollout["reward"],
-                "steps": rollout["steps"],
-            }
+        env = DeadAirGRPOEnv(seed=42 + ep, difficulty=args.difficulty)
+        result = run_episode(
+            env,
+            model,
+            tokenizer,
+            max_steps=args.max_steps,
+            max_new_tokens=args.max_new_tokens,
+            device=next(model.parameters()).device,
+            episode_id=ep + 1,
         )
+        results.append(result)
+        metrics = result.get("metrics", {}) or {}
         print(
-            f"Episode {ep + 1}: reward={rollout['reward']:.3f}, steps={rollout['steps']}"
+            f"Episode {ep + 1}/{args.episodes}: "
+            f"reward={result['reward']:.3f}, "
+            f"steps={result['steps']}, "
+            f"valid={metrics.get('valid_action_rate', 0):.2f}, "
+            f"disp={metrics.get('dispatch_rate', 0):.2f}, "
+            f"fatalities={metrics.get('fatality_count', 0)}"
         )
 
+    # Save results
+    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     with open(args.output, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"Saved results to {args.output}")
+    print(f"\nSaved results to {args.output}")
+
+    # Summary stats
+    rewards = [r["reward"] for r in results]
+    print(f"\nSummary: mean_reward={sum(rewards)/len(rewards):.3f}, min={min(rewards):.3f}, max={max(rewards):.3f}")
 
 
 if __name__ == "__main__":
