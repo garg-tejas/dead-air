@@ -9,7 +9,10 @@ import argparse
 import json
 from typing import Any, Dict, List
 
+from server.city_graph import CityGraph
 from server.dispatcher_environment import DispatcherEnvironment
+
+_g = CityGraph()
 
 
 def greedy_action(obs: Dict[str, Any]) -> Dict[str, Any]:
@@ -24,12 +27,12 @@ def greedy_action(obs: Dict[str, Any]) -> Dict[str, Any]:
     )
     target = sorted_calls[0]
     best_unit = None
-    best_dist = float("inf")
+    best_time = float("inf")
     for u in units:
         if u.get("last_known_status") == "idle":
-            dist = abs(u.get("last_known_location", 0) - target["location"])
-            if dist < best_dist:
-                best_dist = dist
+            t = _g.travel_time(u.get("last_known_location", 0), target["location"])
+            if t < best_time:
+                best_time = t
                 best_unit = u["unit_id"]
     if best_unit is not None:
         return {

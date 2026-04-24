@@ -17,6 +17,7 @@ class RewardComputer:
         units: List[Any],
         oracle_assignments: Dict[int, int],
         unit_start_locations: Optional[Dict[int, int]] = None,
+        coverage_score: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Compute full episode reward and metrics.
 
@@ -63,8 +64,9 @@ class RewardComputer:
         total_fatality_penalty = sum(fatality_penalties)
         fatality_component = 1.0 + total_fatality_penalty  # 1.0 if zero deaths
 
-        # Coverage score
-        coverage_score = self._compute_coverage(units)
+        # Coverage score (use provided time-averaged score if available, else snapshot)
+        if coverage_score is None:
+            coverage_score = self._compute_coverage(units)
 
         # Base episode reward
         episode_reward = (

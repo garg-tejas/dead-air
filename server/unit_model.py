@@ -18,6 +18,7 @@ class RadioDelayBuffer:
 
     def submit(self, current_step: int, status: Dict[str, Any]) -> None:
         """Submit a status update; it may be delayed."""
+        status["confirmed_at_step"] = current_step
         if self.rng.random() < self.delay_prob:
             delay = int(self.rng.integers(self.min_delay, self.max_delay + 1))
             release_step = current_step + delay
@@ -52,6 +53,7 @@ class Unit:
         self.reliability = reliability
         self.status = "idle"  # idle, en_route, on_scene, returning, out_of_service
         self.current_call: Optional[int] = None
+        self.current_call_type: Optional[str] = None
         self.target_node: Optional[int] = None
         self.path_remaining: List[int] = []
         self.time_on_scene: int = 0
@@ -68,6 +70,7 @@ class Unit:
             "reliability": self.reliability,
             "status": self.status,
             "current_call": self.current_call,
+            "current_call_type": self.current_call_type,
             "target_node": self.target_node,
             "path_remaining": self.path_remaining.copy(),
             "time_on_scene": self.time_on_scene,
@@ -82,18 +85,20 @@ class Unit:
     def is_active(self) -> bool:
         return self.status != "out_of_service"
 
-    def dispatch(self, call_id: int, target_node: int, path: List[int]) -> None:
+    def dispatch(self, call_id: int, target_node: int, path: List[int], call_type: str = "trauma") -> None:
         """Dispatch unit to a call."""
         self.status = "en_route"
         self.current_call = call_id
+        self.current_call_type = call_type
         self.target_node = target_node
         self.path_remaining = path[1:] if len(path) > 1 else []
         self.time_on_scene = 0
 
-    def reroute(self, new_call_id: int, target_node: int, path: List[int]) -> None:
+    def reroute(self, new_call_id: int, target_node: int, path: List[int], call_type: str = "trauma") -> None:
         """Reroute unit to a new call."""
         self.status = "en_route"
         self.current_call = new_call_id
+        self.current_call_type = call_type
         self.target_node = target_node
         self.path_remaining = path[1:] if len(path) > 1 else []
 
@@ -158,13 +163,14 @@ class Unit:
         elif self.status == "on_scene":
             self.time_on_scene += 1
             # Scene time: 3 steps for cardiac/trauma, 5 for fire
-            scene_time = 3 if self.current_call is not None else 0
+            scene_time = 5 if self.current_call_type == "fire" else 3
             if self.time_on_scene >= scene_time:
                 self.status = "returning"
                 events.append(f"Unit {self.unit_id} cleared call {self.current_call}")
                 # For simplicity, returning units go idle immediately (transport omitted in basic)
                 self.status = "idle"
                 self.current_call = None
+                self.current_call_type = None
                 self.target_node = None
 
         return events

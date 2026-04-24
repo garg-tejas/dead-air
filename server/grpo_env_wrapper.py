@@ -271,7 +271,7 @@ class DeadAirGRPOEnv:
         return self._step({"action_type": "log", "note": note})
 
     def verify(self, call_id: int) -> str:
-        """Run a background check on a call (free action, does not advance time).
+        """Run a background check on a call (consumes one step).
 
         Args:
             call_id: The call to verify.

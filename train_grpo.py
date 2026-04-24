@@ -21,6 +21,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from server.constants import MAX_STEPS
 from server.grpo_env_wrapper import DeadAirGRPOEnv
 
 SYSTEM_PROMPT = (
@@ -639,89 +640,98 @@ def main():
     reward_history = []
     trajectory_records = [] if args.trajectory_file else None
 
-    for batch_idx in range(num_batches):
-        batch_start = time.time()
-        print(f"\n--- Batch {batch_idx + 1}/{num_batches} ---")
+    try:
+        for batch_idx in range(num_batches):
+            batch_start = time.time()
+            print(f"\n--- Batch {batch_idx + 1}/{num_batches} ---")
 
-        # Decay epsilon
-        if batch_idx < args.epsilon_decay_batches:
-            epsilon = args.epsilon_start - (args.epsilon_start - args.epsilon_end) * (
-                batch_idx / args.epsilon_decay_batches
+            # Decay epsilon
+            if batch_idx < args.epsilon_decay_batches:
+                epsilon = args.epsilon_start - (args.epsilon_start - args.epsilon_end) * (
+                    batch_idx / args.epsilon_decay_batches
+                )
+            else:
+                epsilon = args.epsilon_end
+            print(f"Epsilon: {epsilon:.2f}")
+
+            # Collect episodes (batched)
+            envs = [
+                DeadAirGRPOEnv(
+                    seed=args.seed + batch_idx * args.batch_size + i,
+                    difficulty=args.difficulty,
+                )
+                for i in range(args.batch_size)
+            ]
+
+            episodes, rewards = run_episodes_batched(
+                model,
+                tokenizer,
+                envs,
+                max_steps=MAX_STEPS,
+                max_new_tokens=args.max_completion_length,
+                device=device,
+                epsilon=epsilon,
+                trajectory_records=trajectory_records,
+                batch_offset=batch_idx * args.batch_size,
             )
-        else:
-            epsilon = args.epsilon_end
-        print(f"Epsilon: {epsilon:.2f}")
 
-        # Collect episodes (batched)
-        envs = [
-            DeadAirGRPOEnv(
-                seed=args.seed + batch_idx * args.batch_size + i,
-                difficulty=args.difficulty,
+            mean_reward = np.mean(rewards)
+            non_zero = sum(1 for r in rewards if r > 0)
+            total_steps = sum(len(ep) for ep in episodes)
+            print(
+                f"Mean reward: {mean_reward:.4f} | Non-zero: {non_zero}/{len(rewards)} | "
+                f"Total steps: {total_steps}"
             )
-            for i in range(args.batch_size)
-        ]
 
-        episodes, rewards = run_episodes_batched(
-            model,
-            tokenizer,
-            envs,
-            max_steps=100,
-            max_new_tokens=args.max_completion_length,
-            device=device,
-            epsilon=epsilon,
-            trajectory_records=trajectory_records,
-            batch_offset=batch_idx * args.batch_size,
-        )
+            # Skip update if all rewards are 0
+            if all(r == 0 for r in rewards):
+                print("All rewards zero — skipping update")
+                if args.trajectory_file and trajectory_records:
+                    # Back-fill rewards for episodes seen so far
+                    for rec in trajectory_records:
+                        ep = rec["episode"]
+                        if ep < len(reward_history):
+                            rec["episode_reward"] = reward_history[ep]
+                    with open(args.trajectory_file, "w") as f:
+                        json.dump(trajectory_records, f, indent=2)
+                    print(f"Saved trajectory snapshot to {args.trajectory_file}")
+                continue
 
-        mean_reward = np.mean(rewards)
-        non_zero = sum(1 for r in rewards if r > 0)
-        total_steps = sum(len(ep) for ep in episodes)
-        print(
-            f"Mean reward: {mean_reward:.4f} | Non-zero: {non_zero}/{len(rewards)} | "
-            f"Total steps: {total_steps}"
-        )
+            # GRPO update
+            torch.cuda.empty_cache()
+            gc.collect()
+            optimizer.zero_grad()
+            loss = compute_grpo_loss(
+                model,
+                tokenizer,
+                episodes,
+                rewards,
+                micro_batch_size=args.micro_batch_size,
+            )
+            optimizer.step()
+            print(f"Loss: {loss:.4f}")
 
-        # Skip update if all rewards are 0
-        if all(r == 0 for r in rewards):
-            print("All rewards zero — skipping update")
-            if args.trajectory_file and trajectory_records:
-                # Back-fill rewards for episodes seen so far
-                for rec in trajectory_records:
-                    ep = rec["episode"]
-                    if ep < len(reward_history):
-                        rec["episode_reward"] = reward_history[ep]
-                with open(args.trajectory_file, "w") as f:
-                    json.dump(trajectory_records, f, indent=2)
-                print(f"Saved trajectory snapshot to {args.trajectory_file}")
-            continue
+            batch_time = time.time() - batch_start
+            print(f"Batch time: {batch_time:.1f}s")
 
-        # GRPO update
-        torch.cuda.empty_cache()
-        gc.collect()
-        optimizer.zero_grad()
-        loss = compute_grpo_loss(
-            model,
-            tokenizer,
-            episodes,
-            rewards,
-            micro_batch_size=args.micro_batch_size,
-        )
-        optimizer.step()
-        print(f"Loss: {loss:.4f}")
+            reward_history.extend(rewards)
 
-        batch_time = time.time() - batch_start
-        print(f"Batch time: {batch_time:.1f}s")
+            # Save checkpoint
+            episodes_done = (batch_idx + 1) * args.batch_size
+            if episodes_done % args.save_every == 0:
+                save_path = os.path.join(args.output_dir, f"checkpoint-{episodes_done}")
+                os.makedirs(save_path, exist_ok=True)
+                model.save_pretrained(save_path)
+                tokenizer.save_pretrained(save_path)
+                print(f"Saved checkpoint to {save_path}")
 
-        reward_history.extend(rewards)
-
-        # Save checkpoint
-        episodes_done = (batch_idx + 1) * args.batch_size
-        if episodes_done % args.save_every == 0:
-            save_path = os.path.join(args.output_dir, f"checkpoint-{episodes_done}")
-            os.makedirs(save_path, exist_ok=True)
-            model.save_pretrained(save_path)
-            tokenizer.save_pretrained(save_path)
-            print(f"Saved checkpoint to {save_path}")
+    except KeyboardInterrupt:
+        print("\n\n[INTERRUPTED] Saving emergency checkpoint...")
+        interrupt_path = os.path.join(args.output_dir, "interrupted")
+        os.makedirs(interrupt_path, exist_ok=True)
+        model.save_pretrained(interrupt_path)
+        tokenizer.save_pretrained(interrupt_path)
+        print(f"Saved emergency checkpoint to {interrupt_path}")
 
     # Final save
     final_path = os.path.join(args.output_dir, "final")

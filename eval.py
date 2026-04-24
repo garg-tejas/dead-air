@@ -1,8 +1,11 @@
 """Evaluation script: greedy baseline vs oracle comparison."""
 
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List
 
 from server.dispatcher_environment import DispatcherEnvironment
+from server.city_graph import CityGraph
+
+_g = CityGraph()  # shared graph for distance lookups
 
 
 def greedy_agent_step(obs: Dict[str, Any]) -> Dict[str, Any]:
@@ -25,14 +28,14 @@ def greedy_agent_step(obs: Dict[str, Any]) -> Dict[str, Any]:
         call_id = call["call_id"]
         call_loc = call["location"]
 
-        # Find closest idle unit using node distance (proxy for graph distance)
+        # Find closest idle unit using actual graph travel time
         best_unit = None
-        best_dist = float("inf")
+        best_time = float("inf")
         for u in unit_statuses:
             if u.get("last_known_status") == "idle":
-                dist = abs(u.get("last_known_location", 0) - call_loc)
-                if dist < best_dist:
-                    best_dist = dist
+                t = _g.travel_time(u.get("last_known_location", 0), call_loc)
+                if t < best_time:
+                    best_time = t
                     best_unit = u["unit_id"]
 
         if best_unit is not None:

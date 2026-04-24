@@ -51,6 +51,9 @@ class DispatcherEnvironment(Environment):
         # Snapshot unit start locations for oracle time computation
         self._unit_start_locations: Dict[int, int] = {}
 
+        # Per-step coverage accumulator (time-averaged coverage score)
+        self._covered_steps = 0
+
         self._state = State(episode_id=str(uuid4()), step_count=0)
 
     def reset(self, difficulty: str = "warmup") -> Dict[str, Any]:
@@ -101,6 +104,9 @@ class DispatcherEnvironment(Environment):
 
         # Snapshot start locations for oracle time computation
         self._unit_start_locations = {u.unit_id: u.location for u in self.units}
+
+        # Reset per-step coverage accumulator
+        self._covered_steps = 0
 
         # Seed last known statuses with initial unit states
         for u in self.units:
@@ -191,6 +197,10 @@ class DispatcherEnvironment(Environment):
                 if call["time_elapsed"] > call.get("effective_deadline", float("inf")):
                     call["fatality"] = True
 
+        # Accumulate coverage score per-step (time-averaged)
+        if self._compute_coverage(self.units) == 1.0:
+            self._covered_steps += 1
+
         # Check episode end
         done = False
         reward = None
@@ -201,11 +211,13 @@ class DispatcherEnvironment(Environment):
             from .reward import RewardComputer
             rc = RewardComputer(self.city_graph)
             gt = self.get_ground_truth()
+            coverage_score = self._covered_steps / self.step_count if self.step_count > 0 else 1.0
             result = rc.compute_episode_reward(
                 calls=gt["calls"],
                 units=self.units,
                 oracle_assignments=gt["optimal_assignments"],
                 unit_start_locations=self._unit_start_locations,
+                coverage_score=coverage_score,
             )
             reward = result["episode_reward"]
 
@@ -238,7 +250,7 @@ class DispatcherEnvironment(Environment):
             call = self._get_call(cid)
             if unit and call and unit.is_available():
                 path = self.city_graph.path(unit.location, call["location"])
-                unit.dispatch(cid, call["location"], path)
+                unit.dispatch(cid, call["location"], path, call_type=call.get("call_type", "trauma"))
                 call["assigned_unit"] = uid
                 events.append(f"Dispatched Unit {uid} to Call {cid}")
             else:
@@ -251,7 +263,7 @@ class DispatcherEnvironment(Environment):
             call = self._get_call(cid)
             if unit and call and unit.status == "en_route":
                 path = self.city_graph.path(unit.location, call["location"])
-                unit.reroute(cid, call["location"], path)
+                unit.reroute(cid, call["location"], path, call_type=call.get("call_type", "trauma"))
                 call["assigned_unit"] = uid
                 events.append(f"Rerouted Unit {uid} to Call {cid}")
             else:
@@ -299,8 +311,13 @@ class DispatcherEnvironment(Environment):
             uid = action.get("unit_id")
             hid = action.get("hospital_id")
             unit = self._get_unit(uid)
-            if unit and hid is not None:
-                events.append(f"Diverted Unit {uid} to Hospital {hid}")
+            hospital = self.hospital_model.get_hospital(hid)
+            if unit and hospital:
+                path = self.city_graph.path(unit.location, hospital.location)
+                unit.target_node = hospital.location
+                unit.path_remaining = path[1:] if len(path) > 1 else []
+                unit.status = "en_route"
+                events.append(f"Diverted Unit {uid} to Hospital {hid} ({hospital.name})")
             else:
                 events.append(f"Invalid divert: unit {uid} or hospital {hid}")
 
@@ -344,7 +361,7 @@ class DispatcherEnvironment(Environment):
                 "last_known_location": known["last_known_location"],
                 "last_known_status": known["last_known_status"],
                 "current_call": known["current_call"],
-                "last_update_step": self.step_count,
+                "last_update_step": known.get("confirmed_at_step", self.step_count),
             })
 
         obs = {
@@ -386,7 +403,10 @@ class DispatcherEnvironment(Environment):
 
         oracle_assignments = self.city_graph.oracle_assignment(
             calls=[c for c in self.call_generator.active_calls + self.call_generator.resolved_calls if not c.get("is_false_alarm", False) and not c.get("is_ghost", False)],
-            idle_units=[{"unit_id": u.unit_id, "location": u.location} for u in self.units if u.status == "idle"],
+            idle_units=[
+                {"unit_id": u.unit_id, "location": self._unit_start_locations.get(u.unit_id, u.location)}
+                for u in self.units
+            ],
         )
 
         return {

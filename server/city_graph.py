@@ -42,19 +42,16 @@ class CityGraph:
         self._paths = {int(k): {int(kk): vv for kk, vv in v.items()} for k, v in data["paths"].items()}
 
     def update_edge_weight(self, u: int, v: int, new_weight: float) -> None:
-        """Update edge weight and recompute affected shortest paths.
+        """Update edge weight and recompute all shortest paths.
 
         Called by event_scheduler when bridge collapse or traffic accident
-        changes road conditions.
+        changes road conditions. For a 20-node graph, full recomputation is
+        fast enough to guarantee correctness.
         """
         if not self.graph.has_edge(u, v):
             return
         self.graph[u][v]["weight"] = new_weight
-        # Recompute all paths from u and v (the affected endpoints)
-        for source in (u, v):
-            lengths, paths = nx.single_source_dijkstra(self.graph, source, weight="weight")
-            self._path_lengths[int(source)] = {int(k): float(v) for k, v in lengths.items()}
-            self._paths[int(source)] = {int(k): [int(n) for n in p] for k, p in paths.items()}
+        self._precompute_paths()
 
     def travel_time(self, origin: int, destination: int) -> float:
         """Return shortest travel time in minutes between two nodes."""
