@@ -2,7 +2,10 @@
 
 from typing import Any, Dict, List, Set
 
-from dead_air.server.dispatcher_environment import DispatcherEnvironment
+try:
+    from dead_air.server.dispatcher_environment import DispatcherEnvironment
+except ImportError:
+    from server.dispatcher_environment import DispatcherEnvironment
 
 
 def greedy_agent_step(obs: Dict[str, Any]) -> Dict[str, Any]:

@@ -77,6 +77,7 @@ class EventScheduler:
         traffic_model: Any,
         hospital_model: Any,
         call_generator: Any,
+        city_graph: Any = None,
     ) -> List[str]:
         """Apply the effects of a triggered event."""
         events = []
@@ -85,6 +86,10 @@ class EventScheduler:
             # Simplified: add accident on key bridge edges
             traffic_model.add_accident(5, 10, 3.0)
             traffic_model.add_accident(2, 13, 3.0)
+            # Actually update city graph so units route around the collapsed bridge
+            if city_graph is not None:
+                city_graph.update_edge_weight(5, 10, 21.0)  # was 7, now 3x
+                city_graph.update_edge_weight(2, 13, 18.0)  # was 6, now 3x
             events.append("Bridge collapse: Route 7 and Central Ave crossings x3")
         elif event_name == "hospital_divert":
             # Force County General on divert

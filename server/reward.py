@@ -1,6 +1,6 @@
 """Reward computation for Dead Air environment."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .constants import COVERAGE_THRESHOLD
 
@@ -16,6 +16,7 @@ class RewardComputer:
         calls: List[Dict[str, Any]],
         units: List[Any],
         oracle_assignments: Dict[int, int],
+        unit_start_locations: Optional[Dict[int, int]] = None,
     ) -> Dict[str, Any]:
         """Compute full episode reward and metrics.
 
@@ -39,7 +40,7 @@ class RewardComputer:
                 actual_time = call["time_resolved"] - call["time_received"]
 
             effective_deadline = call.get("effective_deadline", float("inf"))
-            oracle_time = self._get_oracle_time(call, oracle_assignments)
+            oracle_time = self._get_oracle_time(call, oracle_assignments, unit_start_locations)
 
             # Response time score
             if oracle_time > 0 and actual_time > 0:
@@ -89,14 +90,18 @@ class RewardComputer:
             "fatalities": fatalities,
         }
 
-    def _get_oracle_time(self, call: Dict[str, Any], oracle_assignments: Dict[int, int]) -> float:
-        """Get oracle response time for a call."""
+    def _get_oracle_time(
+        self,
+        call: Dict[str, Any],
+        oracle_assignments: Dict[int, int],
+        unit_start_locations: Optional[Dict[int, int]] = None,
+    ) -> float:
+        """Get oracle response time for a call from the assigned unit's start location."""
         call_id = call["call_id"]
         if call_id in oracle_assignments:
             unit_id = oracle_assignments[call_id]
-            # Approximate: oracle assumes unit was at original location
-            # In full env, we'd track unit start positions
-            return self.city_graph.travel_time(0, call["location"])  # simplified
+            unit_loc = unit_start_locations.get(unit_id, 0) if unit_start_locations else 0
+            return self.city_graph.travel_time(unit_loc, call["location"])
         return 1.0
 
     def _compute_coverage(self, units: List[Any]) -> float:

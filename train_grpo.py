@@ -456,7 +456,12 @@ def main():
     else:
         print("LoRA disabled (r=0)")
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=args.learning_rate,
+        weight_decay=0.01,
+        betas=(0.9, 0.999),
+    )
     device = next(model.parameters()).device
 
     # vLLM setup (optional)

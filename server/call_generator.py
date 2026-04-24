@@ -145,12 +145,13 @@ class CallGenerator:
         return events
 
     def resolve_call(self, call_id: int, step: int) -> None:
-        """Mark a call as resolved."""
-        for call in self.active_calls:
+        """Mark a call as resolved and move it from active to resolved list."""
+        for i, call in enumerate(self.active_calls):
             if call["call_id"] == call_id:
                 call["resolved"] = True
                 call["time_resolved"] = step
                 self.resolved_calls.append(call)
+                self.active_calls.pop(i)
                 break
 
     def get_active(self) -> List[Dict[str, Any]]:

@@ -48,6 +48,9 @@ class DispatcherEnvironment(Environment):
         # Radio delay: track last known status per unit (unit_id -> status dict)
         self._last_known_statuses: Dict[int, Dict[str, Any]] = {}
 
+        # Snapshot unit start locations for oracle time computation
+        self._unit_start_locations: Dict[int, int] = {}
+
         self._state = State(episode_id=str(uuid4()), step_count=0)
 
     def reset(self, difficulty: str = "warmup") -> Dict[str, Any]:
@@ -95,6 +98,9 @@ class DispatcherEnvironment(Environment):
 
         # Schedule first call with adversarial bias
         self._next_call_step = self.call_generator.next_call_time(0)
+
+        # Snapshot start locations for oracle time computation
+        self._unit_start_locations = {u.unit_id: u.location for u in self.units}
 
         # Seed last known statuses with initial unit states
         for u in self.units:
@@ -162,6 +168,7 @@ class DispatcherEnvironment(Environment):
                     self.traffic_model,
                     self.hospital_model,
                     self.call_generator,
+                    self.city_graph,
                 )
                 events.extend(event_effects)
 
@@ -198,6 +205,7 @@ class DispatcherEnvironment(Environment):
                 calls=gt["calls"],
                 units=self.units,
                 oracle_assignments=gt["optimal_assignments"],
+                unit_start_locations=self._unit_start_locations,
             )
             reward = result["episode_reward"]
 
