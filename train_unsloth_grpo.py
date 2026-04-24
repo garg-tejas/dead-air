@@ -5,14 +5,14 @@ The training loop mirrors train_grpo.py but swaps in Unsloth model loading.
 
 Usage (on Lightning AI L4):
     python train_unsloth_grpo.py \
-        --model unsloth/Qwen3.5-2B \
+        --model unsloth/Qwen3.5-2B-Instruct \
         --episodes 200 \
         --batch-size 8 \
         --use-4bit
 
     # Or with a standard HF model (Unsloth will still optimize it):
     python train_unsloth_grpo.py \
-        --model Qwen/Qwen3.5-2B \
+        --model Qwen/Qwen3.5-2B-Instruct \
         --episodes 200 \
         --batch-size 8
 """
@@ -313,7 +313,13 @@ def main():
     parser = argparse.ArgumentParser(
         description="Dead Air GRPO training with Unsloth"
     )
-    parser.add_argument("--model", type=str, default="unsloth/Qwen3.5-2B")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="unsloth/Qwen3.5-2B-Instruct",
+        help="Unsloth model id (default: unsloth/Qwen3.5-2B-Instruct). "
+             "Use the -Instruct variant for text-only RL.",
+    )
     parser.add_argument("--episodes", type=int, default=200)
     parser.add_argument("--difficulty", type=str, default="learning")
     parser.add_argument("--output-dir", type=str, default="./outputs/unsloth_grpo")
