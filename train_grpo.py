@@ -255,9 +255,13 @@ def run_episode(
 
 
 def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_batch_size=1):
-    """Compute GRPO clipped surrogate loss (memory-efficient with micro-batching)."""
+    """Compute GRPO clipped surrogate loss (memory-efficient with micro-batching).
+
+    Calls backward() internally on each micro-batch to avoid accumulating
+    computation graphs across all steps. Returns a detached scalar for logging.
+    """
     if not episodes or not rewards:
-        return torch.tensor(0.0, device=model.device, requires_grad=True)
+        return 0.0
 
     # Normalize rewards
     rewards_t = torch.tensor(rewards, dtype=torch.float32, device=model.device)
@@ -274,11 +278,11 @@ def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_ba
                 "advantage": advantages[ep_idx].item(),
             })
 
-    total_loss = torch.tensor(0.0, device=model.device)
-    num_batches = 0
+    total_steps = len(all_steps)
+    loss_sum = 0.0
 
-    # Process in micro-batches to avoid OOM
-    for i in range(0, len(all_steps), micro_batch_size):
+    # Process in micro-batches; call backward() immediately to free graph
+    for i in range(0, total_steps, micro_batch_size):
         batch_steps = all_steps[i:i + micro_batch_size]
         prompts = [s["prompt"] for s in batch_steps]
         completions = [s["completion"] for s in batch_steps]
@@ -291,7 +295,7 @@ def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_ba
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=1024,
+            max_length=2048,
         ).to(model.device)
 
         outputs = model(**inputs)
@@ -328,14 +332,17 @@ def compute_grpo_loss(model, tokenizer, episodes, rewards, epsilon=0.2, micro_ba
         clipped = torch.clamp(ratio, 1.0 - epsilon, 1.0 + epsilon)
         batch_loss = -torch.min(ratio * step_advantages, clipped * step_advantages).mean()
 
-        total_loss = total_loss + batch_loss
-        num_batches += 1
+        # Scale so gradients sum correctly across all steps, then backward immediately
+        scaled_loss = batch_loss / max(1, total_steps)
+        scaled_loss.backward()
+
+        loss_sum += batch_loss.item()
 
         # Free memory
-        del inputs, outputs, logits, log_probs_all, new_log_probs, ratio, clipped, batch_loss
+        del inputs, outputs, logits, log_probs_all, new_log_probs, ratio, clipped, batch_loss, scaled_loss
         torch.cuda.empty_cache()
 
-    return total_loss / max(1, num_batches)
+    return loss_sum / max(1, total_steps)
 
 
 def main():
@@ -345,7 +352,7 @@ def main():
     parser.add_argument("--difficulty", type=str, default="learning")
     parser.add_argument("--output-dir", type=str, default="./outputs/grpo")
     parser.add_argument("--save-every", type=int, default=50)
-    parser.add_argument("--max-completion-length", type=int, default=256)
+    parser.add_argument("--max-completion-length", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -576,11 +583,10 @@ def main():
 
         # GRPO update
         torch.cuda.empty_cache()
-        loss = compute_grpo_loss(model, tokenizer, episodes, rewards)
-        loss.backward()
-        optimizer.step()
         optimizer.zero_grad()
-        print(f"Loss: {loss.item():.4f}")
+        loss = compute_grpo_loss(model, tokenizer, episodes, rewards)
+        optimizer.step()
+        print(f"Loss: {loss:.4f}")
 
         # Save checkpoint
         episodes_done = (batch_idx + 1) * args.batch_size
