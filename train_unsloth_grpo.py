@@ -17,6 +17,8 @@ Usage (on Lightning AI L4):
         --batch-size 8
 """
 
+import unsloth  # Must be first, before transformers
+
 import argparse
 import gc
 import json
