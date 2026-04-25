@@ -90,6 +90,7 @@ dead-air/
 │   ├── launch_hf_training.py    # HF Spaces training launcher (with nohup)
 │   ├── launch_hf_training.sh    # Bash version of launcher
 │   └── monitor_training.py      # Remote training monitor
+
 │
 ├── server/
 │   ├── app.py                   # FastAPI + WebSocket OpenEnv server
@@ -117,19 +118,6 @@ dead-air/
 ```
 
 ## Quick Start
-
-### Deploy on Hugging Face Spaces (Recommended for Hackathon)
-
-See the complete setup guide: [`HF_SETUP_GUIDE.md`](HF_SETUP_GUIDE.md)
-
-```bash
-# One-command launch on HF Spaces A100
-python scripts/launch_hf_training.py \
-  --model unsloth/Qwen3-14B-unsloth-bnb-4bit \
-  --episodes 200 \
-  --batch-size 8 \
-  --hub-model-id yourname/dead-air-grpo
-```
 
 ### 1. Run Tests
 
@@ -241,7 +229,7 @@ tail -f logs/training_*.log
 
 **A100 is recommended** for the hackathon: 80GB fits 14B with headroom, 2.4× memory bandwidth of L4, and $60 buys exactly 24 hours.
 
-See [`scripts/README.md`](scripts/README.md) for full HF Spaces deployment guide.
+See the project documentation for HF Spaces deployment details.
 
 ### Fallback: Manual GRPO Training
 
