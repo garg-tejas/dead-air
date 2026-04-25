@@ -1,6 +1,6 @@
 #!/bin/bash
-# Launch Dead Air GRPO training on Hugging Face Spaces GPU
-# Usage: bash scripts/launch_hf_training.sh [MODEL] [EPISODES] [BATCH_SIZE]
+# Dead Air Training Launch Script for HF Spaces
+# Run this inside the Space terminal after build completes
 
 set -e
 
@@ -10,7 +10,7 @@ BATCH_SIZE=${3:-8}
 HUB_MODEL_ID=${4:-""}
 
 echo "========================================"
-echo "Dead Air HF Spaces Training Launcher"
+echo "Dead Air Training Launcher"
 echo "========================================"
 echo "Model: $MODEL"
 echo "Episodes: $EPISODES"
@@ -18,20 +18,24 @@ echo "Batch size: $BATCH_SIZE"
 echo "Hub Model ID: ${HUB_MODEL_ID:-'(not pushing)'}"
 echo ""
 
-# Check HF token
+# Verify GPU
+echo "Checking GPU..."
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+
+# Verify HF token is set via Secrets
 if [ -z "$HF_TOKEN" ]; then
-    echo "[WARN] HF_TOKEN not set. Set it with: export HF_TOKEN=hf_..."
-    echo "       You can get one at https://huggingface.co/settings/tokens"
-    echo ""
+    echo "[ERROR] HF_TOKEN not set."
+    echo "        Add it in Space Settings -> Secrets and Variables -> Secrets"
+    echo "        Name: HF_TOKEN, Value: your_hf_token"
+    exit 1
 fi
 
-# Install dependencies if needed
-echo "Installing dependencies..."
-pip install -q unsloth transformers torch trl accelerate numpy networkx huggingface_hub
+echo "HF_TOKEN is set (from Secrets)"
 
-# Pre-download model to cache (avoids timeout during training)
+# Pre-download model to cache (saves time, avoids timeout)
+echo ""
 echo "Pre-downloading model: $MODEL"
-python -c "
+python3 -c "
 from transformers import AutoTokenizer
 from unsloth import FastLanguageModel
 tokenizer = AutoTokenizer.from_pretrained('$MODEL')
@@ -44,7 +48,7 @@ print('Model cached successfully')
 "
 
 # Build command
-CMD="python train_unsloth_grpo.py \\
+CMD="python3 train_unsloth_grpo.py \\
   --model $MODEL \\
   --episodes $EPISODES \\
   --batch-size $BATCH_SIZE \\
