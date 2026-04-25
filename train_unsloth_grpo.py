@@ -845,6 +845,12 @@ def main():
         print(f"🎓 Curriculum enabled: {curriculum_phases}")
         print(f"   Starting at: {current_difficulty}")
 
+    next_checkpoint_episode = 0
+    if args.save_every > 0:
+        next_checkpoint_episode = (
+            (episodes_done // args.save_every) + 1
+        ) * args.save_every
+
     hub_api = _build_hub_api(args)
 
     trajectory_writer = None
@@ -973,43 +979,49 @@ def main():
             episodes_done += batch_size
             completed_batches += 1
 
-            if args.save_every > 0 and episodes_done < args.episodes:
-                if episodes_done % args.save_every == 0:
-                    checkpoint_name = f"checkpoint-{episodes_done}"
-                    resume_payload = _snapshot_resume_state(
-                        args=args,
-                        tracker=tracker,
-                        reward_history=reward_history,
-                        loss_history=loss_history,
-                        episodes_done=episodes_done,
-                        completed_batches=completed_batches,
-                        current_difficulty=current_difficulty,
-                        current_phase_idx=current_phase_idx,
-                        episodes_in_phase=episodes_in_phase,
-                        phase_reward_buffer=phase_reward_buffer,
-                        epsilon=epsilon,
-                        checkpoint_name=checkpoint_name,
+            should_save_checkpoint = (
+                args.save_every > 0
+                and episodes_done < args.episodes
+                and episodes_done >= next_checkpoint_episode
+            )
+            if should_save_checkpoint:
+                checkpoint_name = f"checkpoint-{episodes_done}"
+                resume_payload = _snapshot_resume_state(
+                    args=args,
+                    tracker=tracker,
+                    reward_history=reward_history,
+                    loss_history=loss_history,
+                    episodes_done=episodes_done,
+                    completed_batches=completed_batches,
+                    current_difficulty=current_difficulty,
+                    current_phase_idx=current_phase_idx,
+                    episodes_in_phase=episodes_in_phase,
+                    phase_reward_buffer=phase_reward_buffer,
+                    epsilon=epsilon,
+                    checkpoint_name=checkpoint_name,
+                )
+                checkpoint_dir = output_dir / checkpoint_name
+                _save_checkpoint_bundle(
+                    model=model,
+                    tokenizer=tokenizer,
+                    output_dir=checkpoint_dir,
+                    resume_state=resume_payload,
+                )
+                if hub_api is not None and args.hub_model_id:
+                    _upload_folder_with_retry(
+                        api=hub_api,
+                        repo_id=args.hub_model_id,
+                        folder_path=checkpoint_dir,
+                        commit_message=(
+                            f"Checkpoint after {episodes_done} episodes "
+                            f"(reward={last_mean_reward:.3f})"
+                        ),
                     )
-                    checkpoint_dir = output_dir / checkpoint_name
-                    _save_checkpoint_bundle(
-                        model=model,
-                        tokenizer=tokenizer,
-                        output_dir=checkpoint_dir,
-                        resume_state=resume_payload,
+                    print(
+                        f"Pushed checkpoint to https://huggingface.co/{args.hub_model_id}"
                     )
-                    if hub_api is not None and args.hub_model_id:
-                        _upload_folder_with_retry(
-                            api=hub_api,
-                            repo_id=args.hub_model_id,
-                            folder_path=checkpoint_dir,
-                            commit_message=(
-                                f"Checkpoint after {episodes_done} episodes "
-                                f"(reward={last_mean_reward:.3f})"
-                            ),
-                        )
-                        print(
-                            f"Pushed checkpoint to https://huggingface.co/{args.hub_model_id}"
-                        )
+                while next_checkpoint_episode <= episodes_done:
+                    next_checkpoint_episode += args.save_every
 
     except KeyboardInterrupt as exc:
         run_status = "interrupted"
