@@ -426,7 +426,7 @@ def run_episodes_batched(
         if not prompts:
             break
 
-        # --- Batched tokenization & generation ---
+        # --- Batched tokenization ---
         inputs = tokenizer(
             prompts,
             return_tensors="pt",
@@ -434,32 +434,12 @@ def run_episodes_batched(
             truncation=True,
             max_length=2048,
         ).to(device)
-        prompt_lens = inputs.attention_mask.sum(dim=1).tolist()
 
-        with torch.no_grad():
-            output_sequences = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.9,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-            )
+        completions: List[Optional[str]] = [None] * len(prompts)
+        completion_ids_list: List[Optional[torch.Tensor]] = [None] * len(prompts)
+        generation_slots = []
 
-        # Extract per-sequence completions (truncate at first EOS)
-        completions = []
-        completion_ids_list = []
-        for i in range(len(prompts)):
-            p_len = prompt_lens[i]
-            gen_ids = output_sequences[i, p_len:]
-            eos_positions = (gen_ids == tokenizer.eos_token_id).nonzero(as_tuple=True)[0]
-            if len(eos_positions) > 0:
-                gen_ids = gen_ids[: eos_positions[0].item() + 1]
-            completion_ids_list.append(gen_ids)
-            completions.append(tokenizer.decode(gen_ids, skip_special_tokens=True))
-
-        # --- Epsilon-greedy: replace some completions with greedy actions ---
+        # --- Epsilon-greedy: choose greedy actions before generation ---
         for i, idx in enumerate(active_indices):
             if (
                 epsilon > 0
@@ -474,10 +454,70 @@ def run_episodes_batched(
                     add_special_tokens=False,
                 ).input_ids[0].to(device)
                 completion_ids_list[i] = comp_ids
+            else:
+                generation_slots.append(i)
+
+        missing_completion_ids = sum(
+            completion_ids is None for completion_ids in completion_ids_list
+        )
+        if missing_completion_ids != len(generation_slots):
+            raise RuntimeError("Internal epsilon-greedy slot accounting failed.")
+
+        skipped_generations = len(prompts) - len(generation_slots)
+        if skipped_generations:
+            print(
+                f"Step {step_idx + 1}: skipped generation for "
+                f"{skipped_generations}/{len(prompts)} epsilon-greedy actions",
+                flush=True,
+            )
+
+        gen_inputs = None
+        output_sequences = None
+        if generation_slots:
+            gen_prompts = [prompts[i] for i in generation_slots]
+            gen_inputs = tokenizer(
+                gen_prompts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=2048,
+            ).to(device)
+
+            with torch.no_grad():
+                output_sequences = model.generate(
+                    **gen_inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=True,
+                    temperature=0.7,
+                    top_p=0.9,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
+
+            # Extract generated completions after the padded prompt length.
+            generation_start = gen_inputs.input_ids.shape[1]
+            for gen_idx, slot_idx in enumerate(generation_slots):
+                gen_ids = output_sequences[gen_idx, generation_start:]
+                eos_positions = (gen_ids == tokenizer.eos_token_id).nonzero(
+                    as_tuple=True
+                )[0]
+                if len(eos_positions) > 0:
+                    gen_ids = gen_ids[: eos_positions[0].item() + 1]
+                completion_ids_list[slot_idx] = gen_ids
+                completions[slot_idx] = tokenizer.decode(
+                    gen_ids,
+                    skip_special_tokens=True,
+                )
+
+        if any(completion is None for completion in completions):
+            raise RuntimeError("Internal error: missing generated or greedy completion.")
+        if any(completion_ids is None for completion_ids in completion_ids_list):
+            raise RuntimeError("Internal error: missing completion token ids.")
 
         # --- Compute old log-probs in one batched forward pass ---
         prompt_ids_list = [
-            inputs.input_ids[i, : prompt_lens[i]] for i in range(len(prompts))
+            inputs.input_ids[i, inputs.attention_mask[i].bool()]
+            for i in range(len(prompts))
         ]
         full_ids_list = [
             torch.cat([prompt_ids_list[i], completion_ids_list[i]])
@@ -559,6 +599,10 @@ def run_episodes_batched(
             attention_mask,
             old_log_probs,
         )
+        if gen_inputs is not None:
+            del gen_inputs
+        if output_sequences is not None:
+            del output_sequences
         torch.cuda.empty_cache()
 
     rewards = [env.reward if env.reward is not None else 0.0 for env in envs]
@@ -736,6 +780,7 @@ def main():
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
