@@ -4,9 +4,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/data/.cache/huggingface
 
-# Install system dependencies
+# Install system dependencies + python symlink
 RUN apt-get update && apt-get install -y \
-    python3 python3-pip git wget curl vim procps \
+    python3 python3-pip python-is-python3 git wget curl vim procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Create user with UID 1000 (required by HF Spaces)
@@ -20,7 +20,7 @@ ENV PATH="/home/user/.local/bin:${PATH}"
 
 # Copy and install dependencies first (for layer caching)
 COPY --chown=user pyproject.toml .
-RUN pip install --no-cache-dir --user ".[train]" unsloth huggingface-hub
+RUN pip3 install --no-cache-dir --user ".[train]" unsloth huggingface-hub
 
 # Copy all code
 COPY --chown=user . .
