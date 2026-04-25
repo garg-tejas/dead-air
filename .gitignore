@@ -45,5 +45,8 @@ uv.lock
 *.md
 !README.md
 !STATUS.md
+!HF_SETUP_GUIDE.md
+!SPACE_README.md
+!scripts/README.md
 
 *.json

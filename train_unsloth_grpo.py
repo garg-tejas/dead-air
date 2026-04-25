@@ -418,6 +418,22 @@ def main():
         default=3,
         help="Number of recent batches to average for escalation check (default: 3).",
     )
+    parser.add_argument(
+        "--push-to-hub",
+        action="store_true",
+        help="Push checkpoints to Hugging Face Hub (requires HF token in env).",
+    )
+    parser.add_argument(
+        "--hub-model-id",
+        type=str,
+        default=None,
+        help="HF Hub model ID to push checkpoints to (e.g., 'username/dead-air-grpo').",
+    )
+    parser.add_argument(
+        "--hub-private",
+        action="store_true",
+        help="Make HF Hub model private (default: public).",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -630,6 +646,22 @@ def main():
                 tokenizer.save_pretrained(save_path)
                 print(f"Saved checkpoint to {save_path}")
 
+                # Push to HF Hub if requested
+                if args.push_to_hub and args.hub_model_id:
+                    try:
+                        from huggingface_hub import HfApi
+                        api = HfApi()
+                        api.upload_folder(
+                            folder_path=save_path,
+                            repo_id=args.hub_model_id,
+                            repo_type="model",
+                            private=args.hub_private,
+                            commit_message=f"Checkpoint after {episodes_done} episodes (reward={mean_reward:.3f})",
+                        )
+                        print(f"Pushed checkpoint to https://huggingface.co/{args.hub_model_id}")
+                    except Exception as e:
+                        print(f"[WARN] HF Hub push failed: {e}")
+
     except KeyboardInterrupt:
         print("\n\n[INTERRUPTED] Saving emergency checkpoint...")
         interrupt_path = os.path.join(args.output_dir, "interrupted")
@@ -637,6 +669,20 @@ def main():
         model.save_pretrained(interrupt_path)
         tokenizer.save_pretrained(interrupt_path)
         print(f"Saved emergency checkpoint to {interrupt_path}")
+        if args.push_to_hub and args.hub_model_id:
+            try:
+                from huggingface_hub import HfApi
+                api = HfApi()
+                api.upload_folder(
+                    folder_path=interrupt_path,
+                    repo_id=args.hub_model_id,
+                    repo_type="model",
+                    private=args.hub_private,
+                    commit_message="Emergency interrupt checkpoint",
+                )
+                print(f"Pushed emergency checkpoint to https://huggingface.co/{args.hub_model_id}")
+            except Exception as e:
+                print(f"[WARN] HF Hub push failed: {e}")
     finally:
         if trajectory_writer:
             trajectory_writer.close()
@@ -646,6 +692,21 @@ def main():
     os.makedirs(final_path, exist_ok=True)
     model.save_pretrained(final_path)
     tokenizer.save_pretrained(final_path)
+    print(f"Saved final checkpoint to {final_path}")
+    if args.push_to_hub and args.hub_model_id:
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi()
+            api.upload_folder(
+                folder_path=final_path,
+                repo_id=args.hub_model_id,
+                repo_type="model",
+                private=args.hub_private,
+                commit_message="Final checkpoint",
+            )
+            print(f"Pushed final checkpoint to https://huggingface.co/{args.hub_model_id}")
+        except Exception as e:
+            print(f"[WARN] HF Hub push failed: {e}")
 
     # Save metrics
     metrics = {

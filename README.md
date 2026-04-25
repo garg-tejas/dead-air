@@ -86,6 +86,11 @@ dead-air/
 ├── client.py                    # OpenEnv WebSocket client
 ├── models.py                    # Pydantic Action/Observation schemas
 │
+├── scripts/
+│   ├── launch_hf_training.py    # HF Spaces training launcher (with nohup)
+│   ├── launch_hf_training.sh    # Bash version of launcher
+│   └── monitor_training.py      # Remote training monitor
+│
 ├── server/
 │   ├── app.py                   # FastAPI + WebSocket OpenEnv server
 │   ├── dispatcher_environment.py # Core env: reset, step, reward
@@ -112,6 +117,19 @@ dead-air/
 ```
 
 ## Quick Start
+
+### Deploy on Hugging Face Spaces (Recommended for Hackathon)
+
+See the complete setup guide: [`HF_SETUP_GUIDE.md`](HF_SETUP_GUIDE.md)
+
+```bash
+# One-command launch on HF Spaces A100
+python scripts/launch_hf_training.py \
+  --model unsloth/Qwen3-14B-unsloth-bnb-4bit \
+  --episodes 200 \
+  --batch-size 8 \
+  --hub-model-id yourname/dead-air-grpo
+```
 
 ### 1. Run Tests
 
@@ -179,6 +197,7 @@ python train_unsloth_grpo.py \
 
 **Key flags:**
 - `--model unsloth/Qwen3-4B-Thinking-2507-bnb-4bit`: Pre-quantized 4B thinking model (fits in ~17GB)
+- `--model unsloth/Qwen3-14B-unsloth-bnb-4bit`: Upgrade to 14B on A100 (recommended)
 - `--max-completion-length 1536`: Room for reasoning traces + JSON action
 - `--curriculum`: Enable performance-gated difficulty escalation
 - `--curriculum-phases`: Custom phase sequence (default: `warmup,learning,advanced,expert`)
@@ -186,12 +205,43 @@ python train_unsloth_grpo.py \
 - `--curriculum-escalate-threshold 0.65`: Mean reward threshold to advance
 - `--epsilon-start 1.0`: First batches are 100% greedy actions (provides learning signal)
 - `--trajectory-file`: Saves every prompt/completion as JSONL for auditing
+- `--push-to-hub --hub-model-id yourname/model`: Push checkpoints to HF Hub automatically
 
 **Expected behavior (from 8-episode pilot):**
 - Batch 1 (ε=1.0): Mean reward ~0.60–0.80, all actions are greedy dispatch
 - With active calls: Model outputs valid JSON 100% of the time
 - With no calls: Improved system prompt reduces rambling; expect valid `hold` JSON >80%
 - Curriculum escalates when 3-batch mean reward ≥ 0.65 after 30+ episodes in phase
+
+### Training on Hugging Face Spaces (Recommended)
+
+For the hackathon, HF Spaces GPU gives better hardware and persistent checkpoint storage:
+
+```bash
+export HF_TOKEN=hf_...
+
+# Launch with 14B model on A100 (best results)
+python scripts/launch_hf_training.py \
+  --model unsloth/Qwen3-14B-unsloth-bnb-4bit \
+  --episodes 200 \
+  --batch-size 8 \
+  --hub-model-id yourname/dead-air-grpo
+
+# Monitor remotely
+python scripts/monitor_training.py
+tail -f logs/training_*.log
+```
+
+**GPU selection:**
+| GPU | VRAM | $/hr | Max Model |
+|-----|------|------|-----------|
+| L4 | 24GB | $0.80 | 4B–8B |
+| L40S | 48GB | $1.80 | 8B–14B |
+| **A100** | **80GB** | **$2.50** | **14B–30B** |
+
+**A100 is recommended** for the hackathon: 80GB fits 14B with headroom, 2.4× memory bandwidth of L4, and $60 buys exactly 24 hours.
+
+See [`scripts/README.md`](scripts/README.md) for full HF Spaces deployment guide.
 
 ### Fallback: Manual GRPO Training
 
