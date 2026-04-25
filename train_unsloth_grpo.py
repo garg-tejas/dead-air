@@ -33,6 +33,7 @@ from transformers import AutoTokenizer
 
 from server.constants import MAX_STEPS
 from server.grpo_env_wrapper import DispatchRGRPOEnv
+from server.training_tracker import ConsoleReporter, TrainingPlotter, TrainingTracker
 from server.unsloth_grpo_utils import compute_grpo_loss
 
 SYSTEM_PROMPT = (
@@ -503,6 +504,12 @@ def main():
     reward_history = []
     loss_history = []
 
+    # Initialize progress tracker
+    tracker = TrainingTracker(output_dir=args.output_dir)
+    reporter = ConsoleReporter()
+    plotter = TrainingPlotter(tracker)
+    reporter.print_header()
+
     # Curriculum state
     if args.curriculum:
         curriculum_phases = args.curriculum_phases.split(",")
@@ -554,26 +561,20 @@ def main():
                 batch_offset=batch_idx * args.batch_size,
             )
 
-            mean_reward = np.mean(rewards)
-            non_zero = sum(1 for r in rewards if r > 0)
-            total_steps = sum(len(ep) for ep in episodes)
-            print(
-                f"Mean reward: {mean_reward:.4f} | Non-zero: {non_zero}/{len(rewards)} | "
-                f"Total steps: {total_steps}"
-            )
+            # Collect environment metrics from each episode
+            env_metrics_list = []
+            for env in envs:
+                m = env.metrics
+                if m is not None:
+                    env_metrics_list.append(m)
 
             # Curriculum: update phase based on recent performance
+            mean_reward = np.mean(rewards)
             if args.curriculum:
                 episodes_in_phase += len(rewards)
                 phase_reward_buffer.append(mean_reward)
                 if len(phase_reward_buffer) > args.curriculum_window:
                     phase_reward_buffer.pop(0)
-
-                print(
-                    f"Curriculum: phase={current_difficulty} | "
-                    f"episodes_in_phase={episodes_in_phase} | "
-                    f"window_reward_avg={sum(phase_reward_buffer)/len(phase_reward_buffer):.4f}"
-                )
 
                 if (
                     episodes_in_phase >= args.curriculum_min_episodes
@@ -630,10 +631,21 @@ def main():
             print(f"Loss: {loss:.4f}")
 
             batch_time = time.time() - batch_start
-            print(f"Batch time: {batch_time:.1f}s")
 
             reward_history.extend(rewards)
             loss_history.append(loss)
+
+            # Log to tracker and print progress report
+            record = tracker.log_batch(
+                batch_idx=batch_idx,
+                rewards=rewards,
+                loss=float(loss) if loss is not None else None,
+                epsilon=epsilon,
+                difficulty=current_difficulty,
+                batch_time=batch_time,
+                env_metrics_list=env_metrics_list,
+            )
+            reporter.print_batch_report(record, tracker.get_summary(), num_batches)
 
             # Save checkpoint
             episodes_done = (batch_idx + 1) * args.batch_size
@@ -715,16 +727,19 @@ def main():
         "mean": float(np.mean(reward_history)) if reward_history else 0.0,
         "std": float(np.std(reward_history)) if reward_history else 0.0,
         "config": vars(args),
+        "batch_records": tracker.records,
+        "summary": tracker.get_summary(),
     }
     with open(os.path.join(args.output_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=2)
 
-    print(f"\n{'=' * 60}")
-    print("TRAINING COMPLETE")
-    print(f"Mean reward: {metrics['mean']:.4f}")
-    print(f"Std reward:  {metrics['std']:.4f}")
-    print(f"Final model: {final_path}")
-    print(f"{'=' * 60}")
+    # Generate training plots
+    plotter.generate()
+    plotter.generate_simple_plot()
+
+    # Final summary
+    summary = tracker.get_summary()
+    reporter.print_final_summary(summary)
 
 
 if __name__ == "__main__":
