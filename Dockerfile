@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -12,10 +12,11 @@ RUN apt-get update && apt-get install -y \
 # Create user with UID 1000 (required by HF Spaces)
 RUN useradd -m -u 1000 user
 
-# Set up working directory
+# Set up working directory and ensure local bin is on PATH for --user installs
 RUN mkdir -p /app && chown 1000 /app
 WORKDIR /app
 USER 1000
+ENV PATH="/home/user/.local/bin:${PATH}"
 
 # Copy and install dependencies first (for layer caching)
 COPY --chown=user pyproject.toml .
