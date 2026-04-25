@@ -44,6 +44,5 @@ uv.lock
 
 *.md
 !README.md
-!STATUS.md
 
 *.json
