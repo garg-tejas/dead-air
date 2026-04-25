@@ -44,6 +44,7 @@ class DispatcherEnvironment(Environment):
         self._episode_ended = False
         self.adversarial_designer = AdversarialCityDesigner(rng=self.rng)
         self.curriculum = CurriculumController()
+        self._use_internal_curriculum = True  # Set False when CLI manages curriculum
 
         # Radio delay: track last known status per unit (unit_id -> status dict)
         self._last_known_statuses: Dict[int, Dict[str, Any]] = {}
@@ -279,8 +280,10 @@ class DispatcherEnvironment(Environment):
             result["dispatch_rate"] = self._dispatch_count / total_actions if total_actions > 0 else 0.0
 
             # Update curriculum and adversarial designer
-            self.curriculum.record_reward(reward)
-            self.curriculum.update_phase()
+            # Skip internal curriculum when training script manages difficulty externally
+            if self._use_internal_curriculum:
+                self.curriculum.record_reward(reward)
+                self.curriculum.update_phase()
             active_event = self.event_scheduler.triggered_event
             event_name = active_event["name"] if active_event else None
             # Tag calls with zones for adversarial tracking

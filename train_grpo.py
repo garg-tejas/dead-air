@@ -269,7 +269,8 @@ def compute_grpo_loss(
         return 0.0
 
     # Normalize rewards
-    rewards_t = torch.tensor(rewards, dtype=torch.float32, device=model.device)
+    device = next(model.parameters()).device
+    rewards_t = torch.tensor(rewards, dtype=torch.float32, device=device)
     advantages = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
 
     # Flatten all steps
@@ -278,8 +279,8 @@ def compute_grpo_loss(
         for step in steps:
             all_steps.append(
                 {
-                    "prompt_ids": step["prompt_ids"].to(model.device),
-                    "completion_ids": step["completion_ids"].to(model.device),
+                    "prompt_ids": step["prompt_ids"].to(device),
+                    "completion_ids": step["completion_ids"].to(device),
                     "old_log_prob": step["old_log_prob"],
                     "advantage": advantages[ep_idx].item(),
                 }
@@ -302,12 +303,12 @@ def compute_grpo_loss(
             (len(batch_steps), max_len),
             tokenizer.pad_token_id,
             dtype=torch.long,
-            device=model.device,
+            device=device,
         )
         attention_mask = torch.zeros(
             (len(batch_steps), max_len),
             dtype=torch.long,
-            device=model.device,
+            device=device,
         )
         prompt_lens = []
         for j, ids in enumerate(full_ids_list):
@@ -325,7 +326,7 @@ def compute_grpo_loss(
             p_len = prompt_lens[j]
             c_len = batch_steps[j]["completion_ids"].shape[0]
             if c_len == 0:
-                new_log_probs.append(torch.tensor(0.0, device=model.device))
+                new_log_probs.append(torch.tensor(0.0, device=device))
                 continue
 
             token_lps = []
@@ -338,9 +339,9 @@ def compute_grpo_loss(
         new_log_probs = torch.stack(new_log_probs)
         old_log_probs = torch.stack(
             [s["old_log_prob"] for s in batch_steps]
-        ).to(model.device)
+        ).to(device)
         step_advantages = torch.tensor(
-            [s["advantage"] for s in batch_steps], device=model.device
+            [s["advantage"] for s in batch_steps], device=device
         )
 
         # Clipped surrogate loss

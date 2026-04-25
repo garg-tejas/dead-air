@@ -61,8 +61,6 @@ def build_job_cmd(args) -> str:
     ]
     if not args.no_curriculum:
         train_args.append("--curriculum")
-    if args.resume:
-        train_args.append("--resume-from-hub")
 
     train_cmd = "python train_unsloth_grpo.py " + " ".join(train_args)
 
@@ -148,12 +146,6 @@ def main():
         "--before-after", action="store_true",
         help="Run 3-episode inference before AND after training for comparison.",
     )
-    parser.add_argument(
-        "--resume", action="store_true",
-        help="Resume training from the latest checkpoint pushed to --hub-model-id. "
-             "The job downloads training_state.json from the hub, restores batch index "
-             "and reward history, and continues from the next batch.",
-    )
     parser.add_argument("--dry-run", action="store_true", help="Print command without submitting")
     args = parser.parse_args()
 
@@ -194,7 +186,6 @@ def main():
     print(f"Model:        {args.model}")
     print(f"Hub ID:       {args.hub_model_id}")
     print(f"Before/After: {'yes' if args.before_after else 'no'}")
-    print(f"Resume:       {'yes — continuing from last checkpoint' if args.resume else 'no'}")
     print(f"Runs dataset: https://huggingface.co/datasets/{args.hub_model_id}-runs")
     print("")
 

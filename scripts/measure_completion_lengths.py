@@ -66,6 +66,7 @@ def measure(
     for ep in range(episodes):
         env = DispatchRGRPOEnv(seed=42 + ep, difficulty=difficulty)
         env.reset()
+        step_count = 0
 
         for _ in range(80):
             if env._obs and env._obs.get("done"):
@@ -82,8 +83,10 @@ def measure(
             lengths.append(comp_len)
 
             env.step(completion)
+            step_count += 1
 
         rewards.append(env.reward if env.reward is not None else 0.0)
+        print(f"  Episode {ep + 1}/{episodes} complete: {step_count} steps, reward={rewards[-1]:.3f}")
 
     return lengths, rewards
 
@@ -172,6 +175,7 @@ def main():
         generate_fn = lambda prompt, max_tok: generate_transformers(model, tokenizer, prompt, max_tok, device)
 
     print(f"Running {args.episodes} episodes with max_new_tokens=2048 (no truncation)...")
+    print("Progress: episode 0/{}".format(args.episodes))
     start = time.time()
     lengths, rewards = measure(generate_fn, tokenizer, args.episodes, args.difficulty)
     elapsed = time.time() - start

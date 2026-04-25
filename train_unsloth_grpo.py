@@ -374,13 +374,6 @@ def main():
         action="store_true",
         help="Make HF Hub model private (default: public).",
     )
-    parser.add_argument(
-        "--resume-from-hub",
-        action="store_true",
-        help="Resume training from the latest checkpoint already pushed to --hub-model-id. "
-             "Downloads training_state.json and the saved LoRA adapter, then continues "
-             "from the next batch. Requires --push-to-hub and --hub-model-id.",
-    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -415,44 +408,24 @@ def main():
             print(f"[WARN] Could not create/verify model repo: {_e}")
 
     # ------------------------------------------------------------------
-    # 2.  Check for resumable checkpoint
+    # 2.  Load model and LoRA adapters
     # ------------------------------------------------------------------
-    resume_state: dict = {}
-    if args.resume_from_hub and args.hub_model_id:
-        print("\nChecking HF Hub for existing checkpoint...")
-        resume_state = _try_resume_from_hub(args.hub_model_id)
-
-    if resume_state:
-        # Load the LoRA adapter that was saved to HF Hub.
-        # FastLanguageModel reads adapter_config.json to fetch the base model
-        # automatically, then applies the saved adapter weights on top.
-        from huggingface_hub import snapshot_download
-        checkpoint_local = snapshot_download(repo_id=args.hub_model_id)
-        print(f"\nLoading checkpoint from {args.hub_model_id} → {checkpoint_local}")
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=checkpoint_local,
-            load_in_4bit=args.use_4bit,
-            max_seq_length=4096,
-            dtype=torch.bfloat16,
-        )
-        print("LoRA adapters restored from checkpoint.")
-    else:
-        print("\nLoading base model via Unsloth...")
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=args.model,
-            load_in_4bit=args.use_4bit,
-            max_seq_length=4096,
-            dtype=torch.bfloat16,
-        )
-        print("Adding LoRA adapters...")
-        model = FastLanguageModel.get_peft_model(
-            model,
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-            use_rslora=True,
-            bias="none",
-        )
+    print("\nLoading base model via Unsloth...")
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=args.model,
+        load_in_4bit=args.use_4bit,
+        max_seq_length=4096,
+        dtype=torch.bfloat16,
+    )
+    print("Adding LoRA adapters...")
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        use_rslora=True,
+        bias="none",
+    )
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -535,6 +508,10 @@ def main():
                 )
                 for i in range(args.batch_size)
             ]
+            # Disable env internal curriculum when training script manages it
+            if args.curriculum:
+                for env in envs:
+                    env._env._use_internal_curriculum = False
 
             episodes, rewards, trajectory = run_episodes_batched(
                 model,

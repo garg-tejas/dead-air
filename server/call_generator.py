@@ -72,7 +72,6 @@ class CallGenerator:
         if self.heatwave_active > 0:
             weights[0] *= 2.0
             weights = [w / sum(weights) for w in weights]
-            self.heatwave_active -= 1
 
         # Apply adversarial bias to call type
         if "cardiac" in adversarial_bias:
@@ -140,6 +139,9 @@ class CallGenerator:
         """Advance active calls by one step. Resolved calls are already removed by resolve_call()."""
         for call in self.active_calls:
             call["time_elapsed"] = step - call["time_received"]
+        # Decrement heatwave countdown per-step (not per-call)
+        if self.heatwave_active > 0:
+            self.heatwave_active -= 1
         return []
 
     def resolve_call(self, call_id: int, step: int) -> None:
