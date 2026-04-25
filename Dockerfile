@@ -12,7 +12,7 @@ WORKDIR /app
 
 # Copy and install dependencies
 COPY pyproject.toml .
-RUN pip install --no-cache-dir -e ".[train]" unsloth huggingface-hub
+RUN pip install --no-cache-dir ".[train]" unsloth huggingface-hub
 
 # Copy all code
 COPY . .
