@@ -30,13 +30,16 @@ class CallGenerator:
         self.heatwave_active = 0
         self.caller_bias_by_zone = {}
 
-    def configure(self, false_alarm_rate: float = 0.0, panic_range: tuple = (1.0, 1.0), ghost_rate: float = 0.0) -> None:
+    def configure(self, false_alarm_rate: float = 0.0, panic_range: tuple = (1.0, 1.0), ghost_rate: float = 0.0, calls_per_shift: int = 999) -> None:
         self.false_alarm_rate = false_alarm_rate
         self.panic_range = panic_range
         self.ghost_rate = ghost_rate
+        self.calls_per_shift = calls_per_shift
 
     def next_call_time(self, current_step: int) -> int:
         """Sample next call arrival via Poisson process."""
+        if self.call_counter >= self.calls_per_shift:
+            return float("inf")  # No more calls this episode
         lambdas = {"warmup": 8, "learning": 5, "advanced": 4, "expert": 3}
         lam = lambdas.get(self.difficulty, 5)
         delta = self.rng.poisson(lam=lam) + 1
@@ -73,10 +76,13 @@ class CallGenerator:
             weights[0] *= 2.0
             weights = [w / sum(weights) for w in weights]
 
-        # Apply adversarial bias to call type
-        if "cardiac" in adversarial_bias:
-            weights[0] *= (1.0 + adversarial_bias["cardiac"])
-            weights = [w / sum(weights) for w in weights]
+        # Apply adversarial bias to call type (cardiac, trauma, fire)
+        for idx, ctype in enumerate(call_types):
+            if ctype in adversarial_bias:
+                weights[idx] *= (1.0 + adversarial_bias[ctype])
+        total = sum(weights)
+        if total > 0:
+            weights = [w / total for w in weights]
 
         call_type = self.rng.choice(call_types, p=weights).item()
         location = int(self.rng.choice(city_nodes))

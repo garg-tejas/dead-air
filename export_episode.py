@@ -17,6 +17,8 @@ from server.dispatcher_environment import DispatcherEnvironment
 
 def run_and_export(difficulty: str = "learning", output: str = "episode.json", seed: int = 42):
     env = DispatcherEnvironment(seed=seed)
+    # Disable radio delay for deterministic, consistent episode export
+    env.radio_buffer.delay_prob = 0.0
     obs = env.reset(difficulty=difficulty)
 
     episode_log = []
@@ -103,7 +105,7 @@ def greedy_action(env):
         best_dist = float("inf")
         for u in env.units:
             if u.status == "idle":
-                dist = abs(u.location - call["location"])
+                dist = env.city_graph.travel_time(u.location, call["location"])
                 if dist < best_dist:
                     best_dist = dist
                     best_unit = u.unit_id

@@ -37,8 +37,12 @@ class RewardComputer:
                 continue
 
             actual_time = call.get("time_elapsed", 0)
-            if call.get("resolved", False) and call.get("time_resolved"):
-                actual_time = call["time_resolved"] - call["time_received"]
+            if call.get("resolved", False):
+                # Use time_arrived (exclude on-scene time) for response score
+                if call.get("time_arrived") is not None:
+                    actual_time = call["time_arrived"] - call["time_received"]
+                elif call.get("time_resolved"):
+                    actual_time = call["time_resolved"] - call["time_received"]
 
             effective_deadline = call.get("effective_deadline", float("inf"))
             oracle_time = self._get_oracle_time(call, oracle_assignments, unit_start_locations)

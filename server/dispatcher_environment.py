@@ -95,6 +95,7 @@ class DispatcherEnvironment(Environment):
             false_alarm_rate=phase["false_alarm_rate"],
             panic_range=phase["panic_range"],
             ghost_rate=phase["ghost_rate"],
+            calls_per_shift=phase.get("calls_per_shift", 999),
         )
 
         # Randomize caller bias per zone per episode
@@ -167,8 +168,19 @@ class DispatcherEnvironment(Environment):
         for unit in self.units:
             unit_events = unit.tick(self.city_graph, self.rng)
             events.extend(unit_events)
-            # Resolve calls when unit clears them
+            # Track call arrivals and resolve calls when units clear them
             for evt in unit_events:
+                if "arrived at call" in evt:
+                    parts = evt.split()
+                    if len(parts) >= 4:
+                        try:
+                            call_id = int(parts[-1])
+                            for c in self.call_generator.active_calls:
+                                if c["call_id"] == call_id:
+                                    c["time_arrived"] = self.step_count
+                                    break
+                        except ValueError:
+                            pass
                 if "cleared call" in evt:
                     parts = evt.split()
                     if len(parts) >= 4:
@@ -496,13 +508,16 @@ class DispatcherEnvironment(Environment):
             ],
         )
 
-        # Compute average response time (first dispatch to call)
+        # Compute average response time in minutes (graph travel time from
+        # assigned unit's start location to call location)
         response_times = []
         for c in calls:
             if not c.get("is_false_alarm", False) and not c.get("is_ghost", False):
-                cid = c["call_id"]
-                if cid in self._call_first_dispatch_step:
-                    response_times.append(self._call_first_dispatch_step[cid] - c["time_received"])
+                assigned_unit = c.get("assigned_unit")
+                if assigned_unit is not None:
+                    unit_loc = self._unit_start_locations.get(assigned_unit, 0)
+                    rt = self.city_graph.travel_time(unit_loc, c["location"])
+                    response_times.append(rt)
 
         total_actions = self._valid_action_count + self._invalid_action_count + self._hold_count
 

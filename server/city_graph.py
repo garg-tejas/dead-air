@@ -107,10 +107,11 @@ class CityGraph:
         scored_calls = []
         for call in calls:
             call_type = call.get("call_type", "trauma")
-            deadline = DEADLINES.get(call_type, 12)
+            base_deadline = DEADLINES.get(call_type, 12)
+            effective_deadline = call.get("effective_deadline", base_deadline)
             severity = SEVERITY_WEIGHTS.get(call_type, 0.5)
             time_elapsed = call.get("time_elapsed", 0)
-            remaining = max(1, deadline - time_elapsed)
+            remaining = max(1, effective_deadline - time_elapsed)
             urgency = severity / remaining
             scored_calls.append((urgency, call))
 
