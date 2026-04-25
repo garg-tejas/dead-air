@@ -444,7 +444,6 @@ def run_episodes_batched(
             if (
                 epsilon > 0
                 and np.random.rand() < epsilon
-                and envs[idx]._obs.get("active_calls")
             ):
                 greedy_act = greedy_action(envs[idx]._obs)
                 completions[i] = json.dumps(greedy_act)
