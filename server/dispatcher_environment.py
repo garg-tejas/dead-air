@@ -256,6 +256,9 @@ class DispatcherEnvironment(Environment):
 
             # Apply action-validity shaping (anti-hacking layer)
             # Valid actions are rewarded; invalid actions and excessive holding are penalized
+            validity_bonus = 0.0
+            invalidity_penalty = 0.0
+            idle_penalty = 0.0
             total_actions = self._valid_action_count + self._invalid_action_count + self._hold_count
             if total_actions > 0:
                 validity_bonus = (self._valid_action_count / total_actions) * 0.05
@@ -453,10 +456,17 @@ class DispatcherEnvironment(Environment):
 
     def get_ground_truth(self) -> Dict[str, Any]:
         """Reveal ground truth at episode end."""
+        # Deduplicate: a call could theoretically appear in both lists
+        # during a race window between resolve_call() and tick().
+        seen_ids = set()
         calls = []
         for c in self.call_generator.active_calls + self.call_generator.resolved_calls:
+            cid = c["call_id"]
+            if cid in seen_ids:
+                continue
+            seen_ids.add(cid)
             calls.append({
-                "call_id": c["call_id"],
+                "call_id": cid,
                 "location": c["location"],
                 "call_type": c["call_type"],
                 "effective_deadline": c["effective_deadline"],
