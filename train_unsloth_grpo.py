@@ -591,7 +591,6 @@ def run_episodes_batched(
         # Aggressive cleanup between steps
         del (
             inputs,
-            output_sequences,
             model_outputs,
             logits,
             log_probs_all,
