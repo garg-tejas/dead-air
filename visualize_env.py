@@ -112,11 +112,11 @@ def node_pos(node_id):
 
 
 class EpisodeRenderer:
-    def __init__(self, episode_data: List[Dict], output_path: str, fps: int = 30):
+    def __init__(self, episode_data: List[Dict], output_path: str, fps: int = 30, frames_per_step: int = 5):
         self.episode = episode_data
         self.output = output_path
         self.fps = fps
-        self.frames_per_step = 30  # 1 step = 1 second of video
+        self.frames_per_step = frames_per_step  # lower = faster render
         self.G = build_graph()
         self.fig, self.ax = plt.subplots(figsize=(16, 10), dpi=120)
         self.fig.patch.set_facecolor("#0F172A")
@@ -373,13 +373,14 @@ def main():
     parser.add_argument("--input", default="episode.json", help="Episode JSON from export_episode.py")
     parser.add_argument("--output", default="dispatchr_demo.mp4", help="Output MP4 path")
     parser.add_argument("--fps", type=int, default=30, help="Frames per second")
+    parser.add_argument("--frames-per-step", type=int, default=5, help="Interpolation frames per env step (lower=faster render)")
     args = parser.parse_args()
 
     with open(args.input, "r") as f:
         episode_data = json.load(f)
 
     print(f"Loaded {len(episode_data)} steps from {args.input}")
-    renderer = EpisodeRenderer(episode_data, args.output, args.fps)
+    renderer = EpisodeRenderer(episode_data, args.output, args.fps, args.frames_per_step)
     renderer.render()
 
 
