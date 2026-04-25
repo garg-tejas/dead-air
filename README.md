@@ -20,6 +20,8 @@ tags:
 
 A reinforcement learning environment for emergency medical dispatch, built for the Meta OpenEnv Hackathon (India, April 2026).
 
+**Status**: 47/47 tests passing. Active training pipeline validated on Lightning AI L4.
+
 ## What It Is
 
 Dead Air simulates an 8-hour shift for an emergency dispatch commander in a 20-node city. The agent must:
@@ -63,7 +65,8 @@ Episode reward is capped at 1.0 for most cases, but can reach 1.5 with the Merco
 | **City Events** | Bridge collapse (reroutes traffic), hospital divert, heatwave (2x cardiac rate), unit breakdown |
 | **Hospital Capacity** | Hidden true capacity; reported status is noisy |
 | **Adversarial Designer** | Weakness tracker biases call generation toward agent failure zones |
-| **Adaptive Curriculum** | Auto-escalates from Warmup (3 calls, 0 events) to Expert (12 calls, 40% event rate) |
+| **Adaptive Curriculum** | Auto-escalates from Warmup (3 calls, 0 events) to Expert (12 calls, 40% event rate). Now controllable via CLI in training |
+| **LLM-Friendly Prompts** | Active Calls section explicitly shows `(none)` when empty; system prompt includes inline examples and conciseness rules to reduce rambling |
 
 ## Architecture
 
@@ -73,7 +76,8 @@ dead-air/
 ├── openenv.yaml                 # HF Spaces deployment config
 ├── pyproject.toml               # Package dependencies
 │
-├── train_grpo.py                # GRPO training (manual loop, batched generation)
+├── train_unsloth_grpo.py        # PRIMARY: Unsloth GRPO training (2-5x faster)
+├── train_grpo.py                # FALLBACK: Manual GRPO (standard transformers)
 ├── eval.py                      # Greedy baseline evaluation
 ├── demo.py                      # Interactive terminal demo
 ├── diagnose.py                  # Per-episode diagnostic script
@@ -85,7 +89,8 @@ dead-air/
 ├── server/
 │   ├── app.py                   # FastAPI + WebSocket OpenEnv server
 │   ├── dispatcher_environment.py # Core env: reset, step, reward
-│   ├── grpo_env_wrapper.py      # Wrapper for LLM training
+│   ├── grpo_env_wrapper.py      # Wrapper for LLM training (JSON parser + metrics)
+│   ├── unsloth_grpo_utils.py    # GRPO loss computation for batched token trajectories
 │   ├── city_graph.py            # NetworkX graph + Dijkstra oracle
 │   ├── call_generator.py        # Poisson arrivals + panic + false alarms + ghosts
 │   ├── unit_model.py            # Unit state machine + RadioDelayBuffer
@@ -108,7 +113,14 @@ dead-air/
 
 ## Quick Start
 
-### 1. Greedy Baseline
+### 1. Run Tests
+
+```bash
+python -m pytest tests/
+# 47 passed in ~0.5s
+```
+
+### 2. Greedy Baseline
 
 ```bash
 python eval.py
@@ -116,7 +128,7 @@ python eval.py
 
 Runs 10 episodes with a greedy dispatcher (closest idle unit to highest-priority call). Expected mean reward: **~0.45–0.55**.
 
-### 2. Interactive Demo
+### 3. Interactive Demo
 
 ```bash
 python demo.py --episodes 3 --difficulty learning --delay 0.3
@@ -124,7 +136,7 @@ python demo.py --episodes 3 --difficulty learning --delay 0.3
 
 Watch the greedy agent handle a full shift in real time.
 
-### 3. Diagnostics
+### 4. Diagnostics
 
 ```bash
 python diagnose.py --episodes 10 --agent greedy
@@ -138,13 +150,52 @@ Per-episode breakdown: reward, fatalities, action histogram, events.
 
 - Python 3.10+
 - CUDA-capable GPU (tested on L4 24GB)
-- `transformers`, `torch`, `peft`, `bitsandbytes`
+- `unsloth`, `transformers`, `torch`, `trl`
 
 ```bash
-pip install transformers torch peft bitsandbytes numpy networkx
+pip install unsloth transformers torch trl numpy networkx
 ```
 
-### GRPO Training
+> **Note**: `import unsloth` must happen **before** `import transformers` to enable kernel optimizations.
+
+### Primary: Unsloth GRPO Training
+
+```bash
+python train_unsloth_grpo.py \
+  --model unsloth/Qwen3-4B-Thinking-2507-bnb-4bit \
+  --episodes 200 \
+  --batch-size 8 \
+  --max-completion-length 1536 \
+  --curriculum \
+  --save-every 25 \
+  --trajectory-file ./outputs/unsloth_grpo/trajectory.jsonl \
+  --output-dir ./outputs/unsloth_grpo
+```
+
+**Why Unsloth?**
+- 2–5× faster than manual GRPO on L4
+- Pre-quantized `-bnb-4bit` models load in ~30s (no CPU RAM spike)
+- Thinking-enabled models generate `<think>` reasoning blocks that RL can optimize
+
+**Key flags:**
+- `--model unsloth/Qwen3-4B-Thinking-2507-bnb-4bit`: Pre-quantized 4B thinking model (fits in ~17GB)
+- `--max-completion-length 1536`: Room for reasoning traces + JSON action
+- `--curriculum`: Enable performance-gated difficulty escalation
+- `--curriculum-phases`: Custom phase sequence (default: `warmup,learning,advanced,expert`)
+- `--curriculum-min-episodes 30`: Min episodes before escalation
+- `--curriculum-escalate-threshold 0.65`: Mean reward threshold to advance
+- `--epsilon-start 1.0`: First batches are 100% greedy actions (provides learning signal)
+- `--trajectory-file`: Saves every prompt/completion as JSONL for auditing
+
+**Expected behavior (from 8-episode pilot):**
+- Batch 1 (ε=1.0): Mean reward ~0.60–0.80, all actions are greedy dispatch
+- With active calls: Model outputs valid JSON 100% of the time
+- With no calls: Improved system prompt reduces rambling; expect valid `hold` JSON >80%
+- Curriculum escalates when 3-batch mean reward ≥ 0.65 after 30+ episodes in phase
+
+### Fallback: Manual GRPO Training
+
+If Unsloth is unavailable:
 
 ```bash
 python train_grpo.py \
@@ -156,29 +207,27 @@ python train_grpo.py \
   --output-dir ./outputs/grpo
 ```
 
-**Key flags:**
-- `--use-4bit`: Loads model in 4-bit via BitsAndBytes (required for L4 24GB)
-- `--batch-size 8`: Number of parallel episodes per batch
-- `--epsilon-start 1.0`: First batch is 100% greedy actions (provides learning signal)
-- `--trajectory-file`: Saves every prompt/completion/parsed action for auditing
-
-**Expected behavior:**
-- Batch 1 (ε=1.0): Mean reward ~0.50, all actions are greedy dispatch
-- Batches 2–10 (ε decays): Model starts generating reasoning + JSON
-- Batches 10–50: Completion lengths grow, parse rate stabilizes
-- Reward variance should decrease as model learns valid JSON dispatch format
+Same `--curriculum` flags supported.
 
 ### Monitoring
 
 Track these during training:
-- `Mean reward` — should increase from ~0.50 toward ~0.60+
+- `Mean reward` — should increase from ~0.55 toward ~0.70+
 - `Non-zero` — fraction of episodes with reward > 0
 - `Loss` — should be non-zero and gradually decrease
-- `Completion lengths` — should grow as model starts reasoning
+- `Curriculum: phase=X` — shows current difficulty phase
+- `🎓 CURRICULUM ESCALATED` — confirms progression
 
 After training, inspect the trajectory file:
 ```bash
-python -c "import json; d=json.load(open('outputs/trajectory.json')); print(f'Records: {len(d)}'); print(f'Action types: {set(r[\"action_type\"] for r in d)}')"
+python -c "
+import json
+with open('outputs/unsloth_grpo/trajectory.jsonl') as f:
+    for line in f:
+        d = json.loads(line)
+        print(d['batch'], d['episode'], d['completion'][:100])
+        break
+"
 ```
 
 ## Reward Design
@@ -245,17 +294,18 @@ These metrics let judges verify that improvement is real, not just reward hackin
 
 ## Known Limitations
 
-- **Training is slow**: ~20 min per batch of 8 episodes on L4. 200 episodes ≈ 8 hours.
-- **Untrained model output is poor**: Without ε-greedy warmup, Qwen3.5-2B outputs mostly `verify`/`hold` and gets ~0 reward.
-- **vLLM not used**: Batched `transformers.generate()` is used instead because vLLM's KV cache conflicts with training memory on 24GB.
+- **Training time**: ~15–20 min per batch of 8 episodes on L4. 200 episodes ≈ 6–8 hours.
+- **vLLM not used**: Batched `transformers.generate()` is used instead because vLLM's KV cache conflicts with training memory on 24GB. Unsloth kernels mitigate the speed penalty.
 - **Fire scene time longer**: Fire calls tie up units for 5 steps (vs 3 for cardiac/trauma). This is correct but reduces effective fleet size during fire-heavy episodes.
+- **Model occasionally echoes prompt**: Rarely repeats system prompt text instead of generating an action when confused (mitigated by improved prompt with explicit examples).
 
 ## Team
 
 - **Solo project**: garg-tejas
-- **Model**: Qwen/Qwen3.5-2B (2B params, instruct)
+- **Model**: unsloth/Qwen3-4B-Thinking-2507-bnb-4bit (4B params, thinking-enabled, pre-quantized)
 - **GPU**: Lightning AI L4 (24GB VRAM)
 - **Hackathon**: Meta OpenEnv Hackathon, India, April 25-26 2026
+- **Tests**: 47/47 passing
 
 ## License
 
