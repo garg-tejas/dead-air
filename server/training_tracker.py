@@ -53,6 +53,58 @@ class TrainingTracker:
             writer = csv.writer(f)
             writer.writerow(headers)
 
+    def _write_record_row(self, record: Dict[str, Any]) -> None:
+        """Append one normalized record row to the CSV log."""
+        with open(self.csv_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                record["batch"], record["total_episodes"], record["difficulty"], round(record["epsilon"], 3),
+                round(record["mean_reward"], 4), round(record["std_reward"], 4),
+                round(record["min_reward"], 4), round(record["max_reward"], 4), round(record["median_reward"], 4),
+                round(record["loss"], 4), record["batch_time_s"], record["total_time_s"],
+                round(record["valid_action_rate"], 3), round(record["invalid_action_rate"], 3),
+                round(record["hold_rate"], 3), round(record["dispatch_rate"], 3),
+                round(record["avg_response_time"], 2), record["fatality_count"], record["calls_missed"],
+                round(record["reward_ma_5"], 4), round(record["reward_ma_10"], 4),
+                round(record["loss_ma_5"], 4), round(record["loss_ma_10"], 4),
+                round(record["best_reward"], 4), record["episodes_since_improvement"],
+            ])
+
+    def snapshot(self) -> Dict[str, Any]:
+        """Return a JSON-serializable snapshot for resume workflows."""
+        return {
+            "records": self.records,
+            "episode_rewards": self.episode_rewards,
+            "episode_indices": self.episode_indices,
+            "reward_window": list(self.reward_window),
+            "loss_window": list(self.loss_window),
+            "elapsed_time_s": round(time.time() - self.start_time, 2),
+        }
+
+    def restore(self, state: Optional[Dict[str, Any]]) -> None:
+        """Restore tracker state and rebuild the CSV log."""
+        if not state:
+            return
+
+        self.records = list(state.get("records", []))
+        self.episode_rewards = [float(x) for x in state.get("episode_rewards", [])]
+        self.episode_indices = [int(x) for x in state.get("episode_indices", [])]
+        self.reward_window = deque(
+            [float(x) for x in state.get("reward_window", [])],
+            maxlen=self.reward_window.maxlen,
+        )
+        self.loss_window = deque(
+            [float(x) for x in state.get("loss_window", [])],
+            maxlen=self.loss_window.maxlen,
+        )
+
+        elapsed_time = float(state.get("elapsed_time_s", 0.0))
+        self.start_time = time.time() - max(0.0, elapsed_time)
+
+        self._init_csv()
+        for record in self.records:
+            self._write_record_row(record)
+
     def log_batch(
         self,
         batch_idx: int,
@@ -148,21 +200,7 @@ class TrainingTracker:
         }
         self.records.append(record)
 
-        # Write to CSV
-        with open(self.csv_path, "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                record["batch"], record["total_episodes"], record["difficulty"], round(record["epsilon"], 3),
-                round(record["mean_reward"], 4), round(record["std_reward"], 4),
-                round(record["min_reward"], 4), round(record["max_reward"], 4), round(record["median_reward"], 4),
-                round(record["loss"], 4), record["batch_time_s"], record["total_time_s"],
-                round(record["valid_action_rate"], 3), round(record["invalid_action_rate"], 3),
-                round(record["hold_rate"], 3), round(record["dispatch_rate"], 3),
-                round(record["avg_response_time"], 2), record["fatality_count"], record["calls_missed"],
-                round(record["reward_ma_5"], 4), round(record["reward_ma_10"], 4),
-                round(record["loss_ma_5"], 4), round(record["loss_ma_10"], 4),
-                round(record["best_reward"], 4), record["episodes_since_improvement"],
-            ])
+        self._write_record_row(record)
 
         return record
 
