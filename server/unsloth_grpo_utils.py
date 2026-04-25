@@ -42,14 +42,19 @@ def compute_grpo_loss(
         return 0.0
 
     device = next(model.parameters()).device
+    model.train()
+    if getattr(model, "config", None) is not None:
+        model.config.use_cache = False
 
     # ----- 1.  Per-group advantage normalization -----
     rewards_t = torch.tensor(
         rewards, dtype=torch.float32, device=device
     )
     mean_r = rewards_t.mean()
-    std_r = rewards_t.std() + 1e-8
-    advantages = (rewards_t - mean_r) / std_r  # [num_episodes]
+    std_r = rewards_t.std(unbiased=False)
+    if not torch.isfinite(std_r) or std_r.item() <= 1e-8:
+        return 0.0
+    advantages = (rewards_t - mean_r) / (std_r + 1e-8)  # [num_episodes]
 
     # ----- 2.  Flatten all steps across all episodes -----
     all_prompt_ids = []
@@ -110,6 +115,7 @@ def compute_grpo_loss(
         logits = model(
             input_ids=full_ids_batch,
             attention_mask=attention_mask,
+            use_cache=False,
         ).logits[:, :-1, :]
         log_probs_all = F.log_softmax(logits, dim=-1)
 
