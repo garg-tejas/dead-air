@@ -22,7 +22,6 @@ dependencies = [
     "jmespath>=1.1.0",
     "peft>=0.19.1",
     "huggingface_hub>=0.24.0",
-    "python-dotenv>=1.2.2",
 ]
 
 [project.optional-dependencies]
@@ -40,10 +39,6 @@ dev = [
     "pytest-cov>=4.0.0",
 ]
 
-[project.scripts]
-server = "dispatchr.server.app:main"
-
 [tool.setuptools]
 include-package-data = true
-packages = ["dispatchr", "dispatchr.server"]
-package-dir = { "dispatchr" = ".", "dispatchr.server" = "server" }
+packages = ["server"]

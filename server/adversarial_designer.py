@@ -8,21 +8,32 @@ import numpy as np
 class AdversarialCityDesigner:
     """Tracks agent failures and escalates difficulty dynamically."""
 
-    def __init__(self, rng: Optional[np.random.Generator] = None):
+    def __init__(self, rng: Optional[np.random.Generator] = None, reset_interval: int = 20):
         self.rng = rng or np.random.default_rng()
         self.weaknesses: Dict[str, float] = {}
         self.episode_count = 0
-        self.reset_interval = 20
+        self.reset_interval = reset_interval
 
     def reset(self) -> None:
+        """Clear weakness history and restart the episode counter.
+
+        Called automatically every ``reset_interval`` episodes to prevent
+        stale biases from dominating call generation.
+        """
         self.weaknesses.clear()
         self.episode_count = 0
 
     def record_episode(self, calls: list, fatalities: int, event_name: Optional[str] = None) -> None:
-        """Record failures from an episode to update weakness tracker."""
+        """Record failures from an episode to update weakness tracker.
+
+        Weaknesses are accumulated over ``reset_interval`` consecutive
+        episodes, then cleared. This gives a rolling window of recent
+        failures rather than an ever-growing history.
+        """
         self.episode_count += 1
-        if self.episode_count >= self.reset_interval:
+        if self.episode_count > self.reset_interval:
             self.reset()
+            self.episode_count = 1
 
         for call in calls:
             if call.get("fatality", False):

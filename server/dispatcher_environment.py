@@ -359,6 +359,7 @@ class DispatcherEnvironment(Environment):
                         "location": 0,  # starts at downtown
                         "speed": 1.0,
                         "reliability": 0.90,
+                        "call_type": "trauma",  # default until dispatched
                     },
                 })
                 events.append(f"Mutual aid requested. External Unit {aid_unit_id} arriving in 6 steps.")

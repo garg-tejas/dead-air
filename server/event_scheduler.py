@@ -38,10 +38,12 @@ class EventScheduler:
         ]
         self.triggered_event: Optional[Dict[str, Any]] = None
         self.event_trigger_step: Optional[int] = None
+        self._event_applied = False
 
     def reset(self, event_prob: float = 0.0) -> None:
         self.triggered_event = None
         self.event_trigger_step = None
+        self._event_applied = False
         if self.rng.random() < event_prob:
             template = self.rng.choice(self.event_templates)
             step = int(self.rng.integers(template["min_step"], template["max_step"] + 1))
@@ -79,7 +81,13 @@ class EventScheduler:
         call_generator: Any,
         city_graph: Any = None,
     ) -> List[str]:
-        """Apply the effects of a triggered event."""
+        """Apply the effects of a triggered event.
+
+        Idempotent: calling twice for the same event has no additional effect.
+        """
+        if self._event_applied:
+            return []
+        self._event_applied = True
         events = []
         if event_name == "bridge_collapse":
             # Delay edges crossing between downtown/highway and hills/industrial

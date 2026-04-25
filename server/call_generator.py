@@ -137,14 +137,10 @@ class CallGenerator:
         return call
 
     def tick(self, step: int) -> List[str]:
-        """Advance active calls by one step and prune resolved calls."""
-        events = []
+        """Advance active calls by one step. Resolved calls are already removed by resolve_call()."""
         for call in self.active_calls:
-            if not call["resolved"]:
-                call["time_elapsed"] = step - call["time_received"]
-        # Prune resolved calls that have been in the list for a while to prevent unbounded growth
-        self.active_calls = [c for c in self.active_calls if not c["resolved"]]
-        return events
+            call["time_elapsed"] = step - call["time_received"]
+        return []
 
     def resolve_call(self, call_id: int, step: int) -> None:
         """Mark a call as resolved and move it from active to resolved list."""

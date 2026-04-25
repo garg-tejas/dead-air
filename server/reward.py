@@ -97,7 +97,11 @@ class RewardComputer:
         oracle_assignments: Dict[int, int],
         unit_start_locations: Optional[Dict[int, int]] = None,
     ) -> float:
-        """Get oracle response time for a call from the assigned unit's start location."""
+        """Get oracle response time for a call from the assigned unit's start location.
+
+        NOTE: Uses episode-start locations as an approximation. See
+        ``oracle_assignment()`` docstring for details.
+        """
         call_id = call["call_id"]
         if call_id in oracle_assignments:
             unit_id = oracle_assignments[call_id]

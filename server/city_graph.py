@@ -89,6 +89,12 @@ class CityGraph:
 
         Greedy assignment by severity / remaining_time.
         Returns: {call_id: unit_id}
+
+        NOTE: This is an approximation. Unit locations are taken from the
+        ``idle_units`` argument (typically episode-start locations), not the
+        unit's live location when the call was received. For late-episode calls
+        this makes the oracle slightly optimistic or pessimistic compared to a
+        true per-step oracle. This is a known limitation; see Issue #1.
         """
         from .constants import DEADLINES, SEVERITY_WEIGHTS
 

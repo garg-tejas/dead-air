@@ -27,6 +27,16 @@ def compute_grpo_loss(
     All steps in an episode share the same advantage (the normalized
     episode reward).
 
+    NOTE on loss reporting: The returned loss is a gradient-step-weighted
+    mean across micro-batches, not a simple per-step mean. Comparing runs
+    with different ``micro_batch_size`` may show slightly different loss
+    values even for identical data.
+
+    NOTE on old log-probs: ``old_log_prob`` is precomputed at sampling time
+    and assumes the model has NOT been updated between sampling and this
+    loss call. The caller must ensure sampling and loss happen in the same
+    training iteration.
+
     Args:
         model: Unsloth-fast LoRA model.
         tokenizer: Matching tokenizer.
