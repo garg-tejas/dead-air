@@ -1,15 +1,26 @@
-"""Render a DispatchR episode as an animated MP4 using matplotlib.
+"""Render a DispatchR episode as an animated MP4 (or GIF) using matplotlib.
 
-Usage:
-    python visualize_env.py --input episode.json --output dispatchr_demo.mp4
+Two input modes:
+
+  episode.json  (from export_episode.py — richest data, recommended for demos)
+    python visualize_env.py --input episode.json --output demo.mp4
+
+  trajectory.jsonl  (from train_unsloth_grpo.py / inference.py --trajectory-file)
+    python visualize_env.py --jsonl trajectory.jsonl --output demo.gif
+    python visualize_env.py --jsonl trajectory.jsonl --episode 2 --output ep2.gif
+
+    List available episodes:
+    python visualize_env.py --jsonl trajectory.jsonl --list-episodes
 
 Requires: matplotlib, networkx, numpy
+For MP4: ffmpeg must be installed.
+For GIF: no extra deps needed.
 """
 
 import argparse
 import json
 import math
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import matplotlib
 import matplotlib.animation as animation
@@ -364,24 +375,239 @@ class EpisodeRenderer:
 
 
 # ───────────────────────────────────────────────────────────────
+# JSONL trajectory → episode format converter
+# ───────────────────────────────────────────────────────────────
+
+_TONE_PANIC = {"calm": 0.6, "agitated": 1.0, "screaming": 1.5}
+_DIJKSTRA_CACHE: Dict = {}
+
+
+def _dijkstra_path(src: int, dst: int) -> List[int]:
+    """Shortest path between two city nodes (cached)."""
+    if (src, dst) in _DIJKSTRA_CACHE:
+        return _DIJKSTRA_CACHE[(src, dst)]
+    import networkx as nx
+    G = build_graph()
+    try:
+        path = nx.shortest_path(G, src, dst, weight="weight")
+    except nx.NetworkXNoPath:
+        path = [src, dst]
+    _DIJKSTRA_CACHE[(src, dst)] = path
+    return path
+
+
+def jsonl_to_episode(path: str, episode_idx: int = 0) -> List[Dict]:
+    """Convert a trajectory JSONL file to the episode format expected by EpisodeRenderer.
+
+    The JSONL format has one line per env step:
+        {"episode": 0, "step": 0, "reward": 0.72, "obs": {...}}
+
+    The episode format needs per-step dicts with keys:
+        step, max_steps, reward, units, calls, events, traffic_alerts,
+        hospital_statuses, recent_events
+
+    Path-remaining is inferred via Dijkstra between consecutive observed locations.
+    Resolved calls are detected as calls that disappear from one step to the next.
+    """
+    # Load all steps for the requested episode
+    raw_steps: List[Dict] = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if d.get("episode", 0) == episode_idx and d.get("obs"):
+                raw_steps.append(d)
+    raw_steps.sort(key=lambda x: x.get("step", 0))
+
+    if not raw_steps:
+        return []
+
+    episode_reward = raw_steps[-1].get("reward", 0.0)
+
+    # Track which calls were seen so we can mark resolved ones
+    prev_call_ids: set = set()
+    resolved_calls: List[Dict] = []
+
+    episode: List[Dict] = []
+    for i, raw in enumerate(raw_steps):
+        obs = raw.get("obs", {})
+        next_obs = raw_steps[i + 1].get("obs", {}) if i + 1 < len(raw_steps) else {}
+
+        # Build next-step location lookup for path inference
+        next_unit_loc: Dict[int, int] = {
+            u["unit_id"]: u["last_known_location"]
+            for u in next_obs.get("unit_statuses", [])
+        }
+
+        # ── Units ──
+        units = []
+        for u in obs.get("unit_statuses", []):
+            uid      = u["unit_id"]
+            curr_loc = u["last_known_location"]
+            status   = u.get("last_known_status", "idle")
+            next_loc = next_unit_loc.get(uid, curr_loc)
+
+            # Infer path_remaining only when actually moving
+            path_remaining: List[int] = []
+            if status == "en_route" and next_loc != curr_loc:
+                full = _dijkstra_path(curr_loc, next_loc)
+                path_remaining = full[1:] if len(full) > 1 else []
+
+            units.append({
+                "unit_id":       uid,
+                "location":      curr_loc,
+                "status":        status,
+                "current_call":  u.get("current_call"),
+                "path_remaining": path_remaining,
+            })
+
+        # ── Calls ──
+        current_call_ids = {c["call_id"] for c in obs.get("active_calls", [])}
+
+        # Any call seen last step but absent now → resolved (outcome unknown from obs)
+        for cid in prev_call_ids - current_call_ids:
+            # Find the call data from the previous step
+            prev_raw = raw_steps[i - 1].get("obs", {}) if i > 0 else {}
+            for pc in prev_raw.get("active_calls", []):
+                if pc["call_id"] == cid:
+                    resolved_calls.append({**pc, "resolved": True, "fatality": False})
+                    break
+
+        prev_call_ids = current_call_ids
+
+        calls = [
+            {
+                "call_id":       c["call_id"],
+                "location":      c["location"],
+                "reported_type": c.get("reported_type", "trauma"),
+                "caller_tone":   c.get("caller_tone", "agitated"),
+                "panic_modifier": _TONE_PANIC.get(c.get("caller_tone", "agitated"), 1.0),
+                "time_elapsed":  c.get("time_elapsed", 0),
+                "assigned_unit": c.get("assigned_unit"),
+                "is_ghost":      c.get("is_ghost", False),
+                "is_false_alarm": c.get("is_false_alarm", False),
+                "resolved":      False,
+                "fatality":      False,
+            }
+            for c in obs.get("active_calls", [])
+        ] + [dict(rc) for rc in resolved_calls]
+
+        episode.append({
+            "step":             obs.get("step_number", raw.get("step", i)),
+            "max_steps":        obs.get("max_steps", 80),
+            "reward":           episode_reward,
+            "units":            units,
+            "calls":            calls,
+            "events":           [],
+            "traffic_alerts":   obs.get("traffic_alerts", []),
+            "hospital_statuses": obs.get("hospital_statuses", []),
+            "recent_events":    obs.get("traffic_alerts", []),  # proxy
+        })
+
+    return episode
+
+
+def list_jsonl_episodes(path: str) -> List[int]:
+    eps: set = set()
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                eps.add(json.loads(line).get("episode", 0))
+            except json.JSONDecodeError:
+                pass
+    return sorted(eps)
+
+
+# ───────────────────────────────────────────────────────────────
 # Main
 # ───────────────────────────────────────────────────────────────
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default="episode.json", help="Episode JSON from export_episode.py")
-    parser.add_argument("--output", default="dispatchr_demo.mp4", help="Output MP4 path")
-    parser.add_argument("--fps", type=int, default=30, help="Frames per second")
-    parser.add_argument("--frames-per-step", type=int, default=5, help="Interpolation frames per env step (lower=faster render)")
+    parser = argparse.ArgumentParser(
+        description="Animate a DispatchR episode",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    # Input sources (one required)
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--input",
+                     help="Episode JSON from export_episode.py (richest data)")
+    src.add_argument("--jsonl",
+                     help="Trajectory JSONL from train_unsloth_grpo.py / inference.py")
+
+    parser.add_argument("--episode", type=int, default=0,
+                        help="Episode index (--jsonl mode only, default: 0)")
+    parser.add_argument("--list-episodes", action="store_true",
+                        help="Print available episode indices and exit (--jsonl mode only)")
+    parser.add_argument("--output", default=None,
+                        help="Output file path. Extension decides format: .mp4 (needs ffmpeg) "
+                             "or .gif (default when using --jsonl)")
+    parser.add_argument("--fps", type=int, default=None,
+                        help="Frames per second (default: 30 for MP4, 8 for GIF)")
+    parser.add_argument("--frames-per-step", type=int, default=5,
+                        help="Interpolation frames per env step (default: 5)")
     args = parser.parse_args()
 
-    with open(args.input, "r") as f:
-        episode_data = json.load(f)
+    # ── JSONL mode ──
+    if args.jsonl:
+        if args.list_episodes:
+            print(f"Episodes in {args.jsonl}: {list_jsonl_episodes(args.jsonl)}")
+            return
 
-    print(f"Loaded {len(episode_data)} steps from {args.input}")
-    renderer = EpisodeRenderer(episode_data, args.output, args.fps, args.frames_per_step)
-    renderer.render()
+        print(f"Converting episode {args.episode} from {args.jsonl} …")
+        episode_data = jsonl_to_episode(args.jsonl, episode_idx=args.episode)
+        if not episode_data:
+            print(f"ERROR: no steps found for episode {args.episode}. "
+                  f"Use --list-episodes to see available episodes.")
+            return
+        if not any(s.get("units") for s in episode_data):
+            print("ERROR: trajectory has no 'obs' data. "
+                  "Re-run with --trajectory-file on an updated codebase.")
+            return
+
+        output   = args.output or "city_animation.gif"
+        fps      = args.fps or 8
+        fps_step = args.frames_per_step
+
+    # ── episode.json mode ──
+    else:
+        with open(args.input) as f:
+            episode_data = json.load(f)
+
+        output   = args.output or "dispatchr_demo.mp4"
+        fps      = args.fps or 30
+        fps_step = args.frames_per_step
+
+    print(f"Loaded {len(episode_data)} steps")
+    renderer = EpisodeRenderer(episode_data, output, fps, fps_step)
+
+    # Choose writer based on extension
+    ext = output.rsplit(".", 1)[-1].lower()
+    if ext == "gif":
+        from matplotlib.animation import PillowWriter
+        total_frames = len(episode_data) * fps_step
+        ani = animation.FuncAnimation(
+            renderer.fig,
+            renderer._draw_frame,
+            frames=total_frames,
+            interval=1000 // fps,
+            blit=False,
+        )
+        from pathlib import Path
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        ani.save(output, writer=PillowWriter(fps=fps), dpi=100)
+        print(f"Saved → {output}")
+    else:
+        renderer.render()
 
 
 if __name__ == "__main__":

@@ -107,10 +107,13 @@ def compute_grpo_loss(
             attention_mask[i_idx, : ids.shape[0]] = 1
 
         # Forward pass (gradients enabled)
-        logits = model(
+        # NOTE: Unsloth can have inplace ops with sliced logits;
+        # use .clone() to break the view chain.
+        outputs = model(
             input_ids=full_ids_batch,
             attention_mask=attention_mask,
-        ).logits[:, :-1, :]
+        )
+        logits = outputs.logits[:, :-1, :].contiguous().clone()
         log_probs_all = F.log_softmax(logits, dim=-1)
 
         # Gather per-step log-probs

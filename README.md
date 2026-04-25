@@ -5,8 +5,6 @@ colorFrom: red
 colorTo: blue
 sdk: docker
 pinned: false
-app_port: 8000
-base_path: /web
 tags:
   - openenv
   - emergency-response
@@ -20,7 +18,7 @@ tags:
 
 A reinforcement learning environment for emergency medical dispatch, built for the Meta OpenEnv Hackathon (India, April 2026).
 
-**Status**: 47/47 tests passing. Active training pipeline validated on Lightning AI L4.
+**Status**: 47/47 tests passing. Training pipeline validated on L4. Ready for HF Hub Jobs.
 
 ## What It Is
 
@@ -45,6 +43,7 @@ DispatchR maps to **three themes simultaneously**, maximizing the innovation sco
 ### Secondary: Theme #3.1 — World Modeling (Professional Tasks)
 
 Partial observability forces genuine world-model construction:
+
 - **Delayed radio updates**: Unit statuses lag 2-3 steps behind reality
 - **Hidden severity**: Caller tone (calm/agitated/screaming) is observable; true severity is not
 - **Ghost calls**: AI-generated false emergencies with noisy verification
@@ -56,73 +55,76 @@ The agent cannot succeed by pattern-matching — it must maintain a persistent b
 ### Tertiary: Theme #4 — Self-Improvement (Adaptive Curriculum)
 
 Performance-gated curriculum learning auto-escalates difficulty:
+
 - **Warmup** (3 calls, 0% false alarms) → **Expert** (12 calls, 20% false alarms, 40% event rate)
 - Escalation triggered only when mean batch reward stabilizes above 0.65
 - The environment itself gets harder as the agent improves, preventing plateauing on easy scenarios
 
 ## Environment Features
 
-| Feature | Description |
-|---------|-------------|
-| **20-Node City** | 5 zones (Downtown, Highway, Hills, Industrial, Suburbs) with Dijkstra shortest-path routing |
-| **6 Units** | State machine: idle → en_route → on_scene → returning |
-| **Radio Delay** | 10% chance status updates lag 2-3 steps (POMDP) |
-| **Caller Panic Bias** | Hidden panic modifier distorts reported severity; calm voice can mask cardiac |
-| **False Alarms** | 10-20% of calls are false alarms (infinite deadline, no penalty for ignoring) |
-| **Ghost Calls** | AI-generated deepfake emergencies (0-10%). `verify` action returns noisy confidence |
-| **City Events** | Bridge collapse (reroutes traffic), hospital divert, heatwave (2x cardiac rate), unit breakdown |
-| **Hospital Capacity** | Hidden true capacity; reported status is noisy |
-| **Adversarial Designer** | Weakness tracker biases call generation toward agent failure zones |
-| **Adaptive Curriculum** | Auto-escalates from Warmup (3 calls, 0 events) to Expert (12 calls, 40% event rate). Now controllable via CLI in training |
+| Feature                  | Description                                                                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **20-Node City**         | 5 zones (Downtown, Highway, Hills, Industrial, Suburbs) with Dijkstra shortest-path routing                                                |
+| **6 Units**              | State machine: idle → en_route → on_scene → returning                                                                                      |
+| **Radio Delay**          | 10% chance status updates lag 2-3 steps (POMDP)                                                                                            |
+| **Caller Panic Bias**    | Hidden panic modifier distorts reported severity; calm voice can mask cardiac                                                              |
+| **False Alarms**         | 10-20% of calls are false alarms (infinite deadline, no penalty for ignoring)                                                              |
+| **Ghost Calls**          | AI-generated deepfake emergencies (0-10%). `verify` action returns noisy confidence                                                        |
+| **City Events**          | Bridge collapse (reroutes traffic), hospital divert, heatwave (2x cardiac rate), unit breakdown                                            |
+| **Hospital Capacity**    | Hidden true capacity; reported status is noisy                                                                                             |
+| **Adversarial Designer** | Weakness tracker biases call generation toward agent failure zones                                                                         |
+| **Adaptive Curriculum**  | Auto-escalates from Warmup (3 calls, 0 events) to Expert (12 calls, 40% event rate). Now controllable via CLI in training                  |
 | **LLM-Friendly Prompts** | Active Calls section explicitly shows `(none)` when empty; system prompt includes inline examples and conciseness rules to reduce rambling |
 
 ## Architecture
 
 ```
 dead-air/
-├── README.md                    # This file
-├── openenv.yaml                 # HF Spaces deployment config
-├── pyproject.toml               # Package dependencies
+├── README.md                       # This file
+├── pyproject.toml                  # Package dependencies
 │
-├── train_unsloth_grpo.py        # PRIMARY: Unsloth GRPO training (2-5x faster)
-├── train_grpo.py                # FALLBACK: Manual GRPO (standard transformers)
-├── eval.py                      # Greedy baseline evaluation
-├── demo.py                      # Interactive terminal demo
-├── diagnose.py                  # Per-episode diagnostic script
-├── inference.py                 # Run trained checkpoint
-├── plot_rewards.py              # Reward curve visualization
-├── client.py                    # OpenEnv WebSocket client
-├── models.py                    # Pydantic Action/Observation schemas
+├── train_unsloth_grpo.py           # PRIMARY: Unsloth GRPO training with live progress tracking
+├── train_grpo.py                   # FALLBACK: Manual GRPO (standard transformers)
+├── eval.py                         # Greedy baseline evaluation
+├── demo.py                         # Interactive terminal demo
+├── diagnose.py                     # Per-episode diagnostic script
+├── inference.py                    # Run trained checkpoint (supports Unsloth loading)
+├── export_episode.py               # Export greedy episode to JSON for visualization
+├── visualize_env.py                # Render episode JSON → MP4 animation
+├── plot_rewards.py                 # Reward curve visualization
+├── client.py                       # OpenEnv WebSocket client
+├── models.py                       # Pydantic Action/Observation schemas
 │
 ├── scripts/
-│   ├── launch_hf_training.py    # HF Spaces training launcher (with nohup)
-│   ├── launch_hf_training.sh    # Bash version of launcher
-│   └── monitor_training.py      # Remote training monitor
-
+│   ├── launch_hf_job.py            # HF Hub Jobs launcher (Python CLI)
+│   ├── launch_hf_job.sh            # HF Hub Jobs launcher (bash)
+│   ├── plot_training.py            # Plot training metrics from metrics.json
+│   └── visualize_city.py           # City graph visualization tools
 │
 ├── server/
-│   ├── app.py                   # FastAPI + WebSocket OpenEnv server
-│   ├── dispatcher_environment.py # Core env: reset, step, reward
-│   ├── grpo_env_wrapper.py      # Wrapper for LLM training (JSON parser + metrics)
-│   ├── unsloth_grpo_utils.py    # GRPO loss computation for batched token trajectories
-│   ├── city_graph.py            # NetworkX graph + Dijkstra oracle
-│   ├── call_generator.py        # Poisson arrivals + panic + false alarms + ghosts
-│   ├── unit_model.py            # Unit state machine + RadioDelayBuffer
-│   ├── traffic_model.py         # Time-varying edge weights + accident injection
-│   ├── hospital_model.py        # Hidden capacity + noisy divert signals
-│   ├── event_scheduler.py       # City event templates + random triggers
-│   ├── adversarial_designer.py  # Weakness tracker + dynamic bias
-│   ├── curriculum.py            # Auto-escalate/de-escalate difficulty
-│   ├── reward.py                # 3-component episode reward + action validity shaping
-│   └── constants.py             # Medical deadlines, city topology, unit configs
+│   ├── app.py                      # FastAPI + WebSocket OpenEnv server
+│   ├── dispatcher_environment.py   # Core env: reset, step, reward
+│   ├── grpo_env_wrapper.py         # Wrapper for LLM training (JSON parser + metrics)
+│   ├── training_tracker.py         # Real-time progress tracking + CSV + plots
+│   ├── unsloth_grpo_utils.py       # GRPO loss computation for batched token trajectories
+│   ├── city_graph.py               # NetworkX graph + Dijkstra oracle
+│   ├── call_generator.py           # Poisson arrivals + panic + false alarms + ghosts
+│   ├── unit_model.py               # Unit state machine + RadioDelayBuffer
+│   ├── traffic_model.py            # Time-varying edge weights + accident injection
+│   ├── hospital_model.py           # Hidden capacity + noisy divert signals
+│   ├── event_scheduler.py          # City event templates + random triggers
+│   ├── adversarial_designer.py     # Weakness tracker + dynamic bias
+│   ├── curriculum.py               # Auto-escalate/de-escalate difficulty
+│   ├── reward.py                   # 3-component episode reward + action validity shaping
+│   └── constants.py                # Medical deadlines, city topology, unit configs
 │
 └── tests/
-    ├── test_environment.py      # Env lifecycle (reset, step, dispatch, hold)
-    ├── test_call_generator.py   # Call generation, panic, false alarms, ghosts
-    ├── test_unit_model.py       # Unit state machine + radio delay buffer
-    ├── test_city_graph.py       # Graph topology + oracle assignment
-    ├── test_hospital_events.py  # Hospital model + event scheduler
-    └── test_connection.py       # End-to-end episode + curriculum
+    ├── test_environment.py         # Env lifecycle (reset, step, dispatch, hold)
+    ├── test_call_generator.py      # Call generation, panic, false alarms, ghosts
+    ├── test_unit_model.py          # Unit state machine + radio delay buffer
+    ├── test_city_graph.py          # Graph topology + oracle assignment
+    ├── test_hospital_events.py     # Hospital model + event scheduler
+    └── test_connection.py          # End-to-end episode + curriculum
 ```
 
 ## Quick Start
@@ -158,43 +160,53 @@ python diagnose.py --episodes 10 --agent greedy
 
 Per-episode breakdown: reward, fatalities, action histogram, events.
 
+### 5. Visualize an Episode
+
+```bash
+# Export a greedy episode to JSON
+python export_episode.py --difficulty learning --output episode.json
+
+# Render as MP4 (pulsing calls, unit trails, UI overlay)
+python visualize_env.py --input episode.json --output dispatchr_demo.mp4
+```
+
 ## Training
 
 ### Prerequisites
 
 - Python 3.10+
-- CUDA-capable GPU (tested on L4 24GB)
+- CUDA-capable GPU (tested on L4 24GB and A100 80GB)
 - `unsloth`, `transformers`, `torch`, `trl`
 
 ```bash
-pip install unsloth transformers torch trl numpy networkx
+pip install unsloth transformers torch trl numpy networkx matplotlib
 ```
 
 > **Note**: `import unsloth` must happen **before** `import transformers` to enable kernel optimizations.
 
-### Primary: Unsloth GRPO Training
+### Primary: Unsloth GRPO Training (Local)
 
 ```bash
 python train_unsloth_grpo.py \
   --model unsloth/Qwen3-4B-Thinking-2507-bnb-4bit \
   --episodes 200 \
   --batch-size 8 \
-  --max-completion-length 1536 \
+  --max-completion-length 512 \
   --curriculum \
   --save-every 25 \
-  --trajectory-file ./outputs/unsloth_grpo/trajectory.jsonl \
   --output-dir ./outputs/unsloth_grpo
 ```
 
 **Why Unsloth?**
+
 - 2–5× faster than manual GRPO on L4
 - Pre-quantized `-bnb-4bit` models load in ~30s (no CPU RAM spike)
 - Thinking-enabled models generate `<think>` reasoning blocks that RL can optimize
 
 **Key flags:**
+
 - `--model unsloth/Qwen3-4B-Thinking-2507-bnb-4bit`: Pre-quantized 4B thinking model (fits in ~17GB)
-- `--model unsloth/Qwen3-14B-unsloth-bnb-4bit`: Upgrade to 14B on A100 (recommended)
-- `--max-completion-length 1536`: Room for reasoning traces + JSON action
+- `--model unsloth/Qwen3-14B-unsloth-bnb-4bit`: Upgrade to 14B on A100 (recommended for final runs)
 - `--curriculum`: Enable performance-gated difficulty escalation
 - `--curriculum-phases`: Custom phase sequence (default: `warmup,learning,advanced,expert`)
 - `--curriculum-min-episodes 30`: Min episodes before escalation
@@ -203,41 +215,57 @@ python train_unsloth_grpo.py \
 - `--trajectory-file`: Saves every prompt/completion as JSONL for auditing
 - `--push-to-hub --hub-model-id yourname/model`: Push checkpoints to HF Hub automatically
 
-**Expected behavior (from 8-episode pilot):**
-- Batch 1 (ε=1.0): Mean reward ~0.60–0.80, all actions are greedy dispatch
-- With active calls: Model outputs valid JSON 100% of the time
-- With no calls: Improved system prompt reduces rambling; expect valid `hold` JSON >80%
-- Curriculum escalates when 3-batch mean reward ≥ 0.65 after 30+ episodes in phase
+**Live Progress Tracking**
 
-### Training on Hugging Face Spaces (Recommended)
+The training script now includes built-in progress tracking:
 
-For the hackathon, HF Spaces GPU gives better hardware and persistent checkpoint storage:
+- **Console reports** after every batch: reward stats, moving averages, action rates, fatalities, ETA
+- **CSV log**: `outputs/unsloth_grpo/metrics.csv` with per-batch data
+- **Auto-generated plots** at the end:
+  - `training_progress.png` — 6-panel dashboard (reward, loss, validity, actions, fatalities, epsilon/curriculum)
+  - `training_curves.png` — Minimal 2-panel (reward + loss)
+
+### Training on Hugging Face Hub Jobs (Recommended for Hackathon)
+
+HF Hub Jobs provide serverless GPU compute — no Spaces needed, pay-as-you-go.
 
 ```bash
-export HF_TOKEN=hf_...
+# 1. Install HF CLI
+curl -LsSf https://hf.co/cli/install.sh | bash
 
-# Launch with 14B model on A100 (best results)
-python scripts/launch_hf_training.py \
-  --model unsloth/Qwen3-14B-unsloth-bnb-4bit \
+# 2. Login
+hf auth login
+
+# 3. Launch training (L4 = $0.80/hr, 24GB)
+python scripts/launch_hf_job.py --flavor l4x1 --episodes 200
+
+# Or A100 for 14B model ($2.50/hr, 80GB)
+python scripts/launch_hf_job.py \
+  --flavor a100-large \
   --episodes 200 \
-  --batch-size 8 \
-  --hub-model-id yourname/dead-air-grpo
+  --model unsloth/Qwen3-14B-unsloth-bnb-4bit
 
-# Monitor remotely
-python scripts/monitor_training.py
-tail -f logs/training_*.log
+# 4. Watch logs stream in terminal
+#    (Ctrl+C stops watching; job keeps running)
+
+# 5. Check status anytime
+hf jobs list
+hf jobs logs <job-id>
 ```
 
-**GPU selection:**
-| GPU | VRAM | $/hr | Max Model |
-|-----|------|------|-----------|
-| L4 | 24GB | $0.80 | 4B–8B |
-| L40S | 48GB | $1.80 | 8B–14B |
-| **A100** | **80GB** | **$2.50** | **14B–30B** |
+**Hardware Options:**
 
-**A100 is recommended** for the hackathon: 80GB fits 14B with headroom, 2.4× memory bandwidth of L4, and $60 buys exactly 24 hours.
+| Flavor | GPU | VRAM | $/hr | Best For |
+|--------|-----|------|------|----------|
+| `l4x1` | L4 | 24 GB | $0.80 | 4B model, budget runs, pilot testing |
+| `a100-large` | A100 | 80 GB | $2.50 | 14B model, max performance, final runs |
 
-See the project documentation for HF Spaces deployment details.
+**L4 vs A100:**
+- L4 is **better price/performance** for 4B models (~$8-10 for 200 episodes)
+- A100 is **required** for 14B models (L4 OOMs at ~30GB loaded)
+- A100 is ~1.5–2× faster per batch but costs 3.1× more — only worth it for 14B
+
+**Budget math:** $60 credit = 75 hrs on L4 or 24 hrs on A100.
 
 ### Fallback: Manual GRPO Training
 
@@ -249,22 +277,42 @@ python train_grpo.py \
   --episodes 200 \
   --batch-size 8 \
   --use-4bit \
-  --trajectory-file ./outputs/trajectory.json \
   --output-dir ./outputs/grpo
 ```
 
 Same `--curriculum` flags supported.
 
-### Monitoring
+### Monitoring Training Progress
 
-Track these during training:
+**During training (console):**
+
+```bash
+tail -f outputs/unsloth_grpo/metrics.csv
+```
+
+**After training (plots):**
+
+```bash
+# Auto-generated at the end of train_unsloth_grpo.py
+# outputs/unsloth_grpo/training_progress.png
+# outputs/unsloth_grpo/training_curves.png
+
+# Or generate manually from metrics.json
+python scripts/plot_training.py --input outputs/unsloth_grpo/metrics.json
+```
+
+**Track these metrics:**
+
 - `Mean reward` — should increase from ~0.55 toward ~0.70+
-- `Non-zero` — fraction of episodes with reward > 0
+- `MA5 / MA10` — moving averages smooth out episode variance
 - `Loss` — should be non-zero and gradually decrease
+- `Valid action rate` — should stay above 80%
+- `Fatality count` — should trend downward
 - `Curriculum: phase=X` — shows current difficulty phase
 - `🎓 CURRICULUM ESCALATED` — confirms progression
 
-After training, inspect the trajectory file:
+**Inspect trajectory:**
+
 ```bash
 python -c "
 import json
@@ -274,6 +322,23 @@ with open('outputs/unsloth_grpo/trajectory.jsonl') as f:
         print(d['batch'], d['episode'], d['completion'][:100])
         break
 "
+```
+
+## Inference
+
+Run a trained checkpoint:
+
+```bash
+# Standard loading
+python inference.py --model-path ./outputs/unsloth_grpo/final --episodes 10
+
+# Unsloth-optimized loading (faster)
+python inference.py --model-path ./outputs/unsloth_grpo/final \
+  --use-unsloth --load-in-4bit --episodes 10
+
+# Save trajectory for visualization / before-after comparison
+python inference.py --model-path ./outputs/unsloth_grpo/final \
+  --episodes 3 --trajectory-file after.jsonl
 ```
 
 ## Reward Design
@@ -292,15 +357,15 @@ reward = 0.50 * response_score + 0.30 * fatality_component + 0.20 * coverage_sco
 
 ## How the Environment Prevents Reward Hacking
 
-| Safeguard | How It Works |
-|-----------|-------------|
-| **Invalid action penalty** | Every invalid dispatch/stage/verify costs -0.02 in final reward |
-| **Idle penalty** | Every `hold` step costs -0.005; encourages active dispatching |
-| **Time-averaged coverage** | Coverage is measured per-step, not just at episode end. Can't cluster units at the end |
-| **Oracle uses start locations** | Oracle assignments are computed from unit start positions, not scattered end-state positions |
-| **Bridge collapse updates graph** | `CityGraph` recomputes all shortest paths when edges are destroyed. Units actually reroute |
-| **Radio delay is visible** | `last_update_step` shows when status was last confirmed, not current step |
-| **Ghost calls are detectable** | `verify` returns high confidence only 40% of the time on ghost calls (not 60% as design spec said) |
+| Safeguard                         | How It Works                                                                                       |
+| --------------------------------- | -------------------------------------------------------------------------------------------------- |
+| **Invalid action penalty**        | Every invalid dispatch/stage/verify costs -0.02 in final reward                                    |
+| **Idle penalty**                  | Every `hold` step costs -0.005; encourages active dispatching                                      |
+| **Time-averaged coverage**        | Coverage is measured per-step, not just at episode end. Can't cluster units at the end             |
+| **Oracle uses start locations**   | Oracle assignments are computed from unit start positions, not scattered end-state positions       |
+| **Bridge collapse updates graph** | `CityGraph` recomputes all shortest paths when edges are destroyed. Units actually reroute         |
+| **Radio delay is visible**        | `last_update_step` shows when status was last confirmed, not current step                          |
+| **Ghost calls are detectable**    | `verify` returns high confidence only 40% of the time on ghost calls (not 60% as design spec said) |
 
 ## OpenEnv Compliance
 
@@ -312,6 +377,7 @@ This environment implements the OpenEnv interface:
 - `get_ground_truth()` → full episode metrics for analysis
 
 Deploy to Hugging Face Spaces:
+
 ```bash
 openenv push
 ```
@@ -324,9 +390,9 @@ After each episode, `get_ground_truth()` exposes:
 {
   "fatality_count": 2,
   "valid_action_rate": 0.65,
-  "invalid_action_rate": 0.10,
+  "invalid_action_rate": 0.1,
   "hold_rate": 0.25,
-  "dispatch_rate": 0.40,
+  "dispatch_rate": 0.4,
   "avg_response_time": 4.5,
   "calls_missed": 2,
   "response_score": 0.72,
@@ -347,7 +413,7 @@ These metrics let judges verify that improvement is real, not just reward hackin
 
 - **Solo project**: garg-tejas
 - **Model**: unsloth/Qwen3-4B-Thinking-2507-bnb-4bit (4B params, thinking-enabled, pre-quantized)
-- **GPU**: Lightning AI L4 (24GB VRAM)
+- **GPU**: Lightning AI L4 (24GB VRAM) / HF Hub Jobs
 - **Hackathon**: Meta OpenEnv Hackathon, India, April 25-26 2026
 - **Tests**: 47/47 passing
 

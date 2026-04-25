@@ -5,9 +5,16 @@ Uses the same prompt format and stepping logic as train_grpo.py.
 Usage:
     python inference.py --model-path ./outputs/grpo/final --episodes 10 --difficulty expert
     python inference.py --model-path Qwen/Qwen3.5-2B --episodes 5 --difficulty learning
+
+    # Before/after comparison (save trajectory with obs for city animation):
+    python inference.py --model-path unsloth/Qwen3-4B-Thinking-2507-bnb-4bit \\
+        --use-unsloth --episodes 3 --trajectory-file before.jsonl
+    python inference.py --model-path ./outputs/final \\
+        --use-unsloth --episodes 3 --trajectory-file after.jsonl
 """
 
 import argparse
+import copy
 import json
 import os
 from typing import Dict, List, Optional
@@ -134,6 +141,9 @@ def run_episode(
         if env._obs and env._obs.get("done"):
             break
 
+        # Snapshot the observation before stepping (used for city animation)
+        obs_snapshot = copy.deepcopy(env._obs) if env._obs else {}
+
         obs_text = format_observation(env._obs)
         prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text)
         completion = generate_action(model, tokenizer, prompt, max_new_tokens, device)
@@ -151,6 +161,7 @@ def run_episode(
                 "completion": completion,
                 "parsed_action": parsed,
                 "events": result,
+                "obs": obs_snapshot,
             }
         )
 
@@ -185,21 +196,47 @@ def main():
     parser.add_argument(
         "--max-steps", type=int, default=80, help="Max steps per episode"
     )
+    parser.add_argument(
+        "--trajectory-file", type=str, default=None,
+        help="JSONL file to append trajectory steps with obs data (for city animation / before-after comparison).",
+    )
+    parser.add_argument(
+        "--use-unsloth", action="store_true",
+        help="Load model via Unsloth FastLanguageModel (faster, 4-bit support).",
+    )
+    parser.add_argument(
+        "--load-in-4bit", action="store_true",
+        help="Load model in 4-bit quantization (only used with --use-unsloth).",
+    )
     args = parser.parse_args()
 
     print(f"Loading model from {args.model_path}...")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+
+    if args.use_unsloth:
+        try:
+            from unsloth import FastLanguageModel
+            model, tokenizer = FastLanguageModel.from_pretrained(
+                model_name=args.model_path,
+                load_in_4bit=args.load_in_4bit,
+                max_seq_length=4096,
+                dtype=torch.bfloat16,
+            )
+            FastLanguageModel.for_inference(model)
+        except ImportError as exc:
+            raise SystemExit("unsloth not installed. Run without --use-unsloth or: pip install unsloth") from exc
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_path,
+            torch_dtype=torch.bfloat16,
+            device_map="auto" if args.device == "cuda" else None,
+            trust_remote_code=True,
+        )
+        if args.device == "cpu":
+            model = model.to("cpu")
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_path,
-        torch_dtype=torch.bfloat16,
-        device_map="auto" if args.device == "cuda" else None,
-        trust_remote_code=True,
-    )
-    if args.device == "cpu":
-        model = model.to("cpu")
     model.eval()
 
     print(f"Model loaded. Running {args.episodes} episodes at difficulty '{args.difficulty}'...")
@@ -227,11 +264,34 @@ def main():
             f"fatalities={metrics.get('fatality_count', 0)}"
         )
 
-    # Save results
+    # Save results (full JSON)
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     with open(args.output, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\nSaved results to {args.output}")
+
+    # Save JSONL trajectory (for city animation / before-after comparison)
+    if args.trajectory_file:
+        os.makedirs(os.path.dirname(args.trajectory_file) or ".", exist_ok=True)
+        with open(args.trajectory_file, "a", encoding="utf-8") as tf:
+            for result in results:
+                ep = result["episode"]
+                reward = result["reward"]
+                for step in result["trajectory"]:
+                    tf.write(
+                        json.dumps(
+                            {
+                                "episode": ep,
+                                "step": step["step"],
+                                "reward": reward,
+                                "completion": step["completion"],
+                                "obs": step.get("obs", {}),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+        print(f"Saved trajectory to {args.trajectory_file}")
 
     # Summary stats
     rewards = [r["reward"] for r in results]

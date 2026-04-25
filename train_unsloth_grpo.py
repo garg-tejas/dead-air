@@ -20,6 +20,7 @@ Usage (on Lightning AI L4):
 import unsloth  # Must be first, before transformers
 
 import argparse
+import copy
 import gc
 import json
 import os
@@ -35,6 +36,31 @@ from server.constants import MAX_STEPS
 from server.grpo_env_wrapper import DispatchRGRPOEnv
 from server.training_tracker import ConsoleReporter, TrainingPlotter, TrainingTracker
 from server.unsloth_grpo_utils import compute_grpo_loss
+
+
+def _try_resume_from_hub(hub_model_id: str) -> dict:
+    """Download training_state.json from HF Hub if it exists.
+
+    Returns the state dict on success, or an empty dict if no checkpoint found.
+    The state contains batch_idx_done, reward/loss history, and curriculum state.
+    """
+    try:
+        from huggingface_hub import hf_hub_download
+        state_path = hf_hub_download(
+            repo_id=hub_model_id,
+            filename="training_state.json",
+        )
+        with open(state_path) as f:
+            state = json.load(f)
+        print(
+            f"  Found checkpoint: batch {state.get('batch_idx_done', 0) + 1} done, "
+            f"difficulty={state.get('current_difficulty', '?')}, "
+            f"{len(state.get('reward_history', []))} episodes logged."
+        )
+        return state
+    except Exception as e:
+        print(f"  No existing checkpoint ({type(e).__name__}: {e})")
+        return {}
 
 SYSTEM_PROMPT = (
     "You are an emergency dispatch AI managing 6 ambulance units in a 20-node city. "
@@ -290,6 +316,10 @@ def run_episodes_batched(
 
         # --- Step environments & store trajectory ---
         for i, idx in enumerate(active_indices):
+            # Capture obs before stepping so the trajectory reflects what the
+            # model was observing when it produced each completion.
+            obs_snapshot = copy.deepcopy(envs[idx]._obs) if envs[idx]._obs else {}
+
             envs[idx].step(completions[i])
 
             # Move token IDs to CPU to free GPU memory
@@ -301,12 +331,13 @@ def run_episodes_batched(
                 }
             )
 
-            # Store human-readable trajectory
+            # Store human-readable trajectory (obs enables city animation)
             trajectory[idx].append(
                 {
                     "prompt": prompts[i],
                     "completion": completions[i],
                     "action_text": completions[i],
+                    "obs": obs_snapshot,
                 }
             )
 
@@ -435,6 +466,13 @@ def main():
         action="store_true",
         help="Make HF Hub model private (default: public).",
     )
+    parser.add_argument(
+        "--resume-from-hub",
+        action="store_true",
+        help="Resume training from the latest checkpoint already pushed to --hub-model-id. "
+             "Downloads training_state.json and the saved LoRA adapter, then continues "
+             "from the next batch. Requires --push-to-hub and --hub-model-id.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -452,7 +490,32 @@ def main():
     print("=" * 60)
 
     # ------------------------------------------------------------------
-    # 1.  Load model via Unsloth
+    # 1.  Hub setup (create repo so push never hits a 404)
+    # ------------------------------------------------------------------
+    if args.push_to_hub and args.hub_model_id:
+        try:
+            from huggingface_hub import HfApi
+            _hub_api = HfApi()
+            _hub_api.create_repo(
+                repo_id=args.hub_model_id,
+                repo_type="model",
+                exist_ok=True,
+                private=args.hub_private,
+            )
+            print(f"Model repo ready: https://huggingface.co/{args.hub_model_id}")
+        except Exception as _e:
+            print(f"[WARN] Could not create/verify model repo: {_e}")
+
+    # ------------------------------------------------------------------
+    # 2.  Check for resumable checkpoint
+    # ------------------------------------------------------------------
+    resume_state: dict = {}
+    if args.resume_from_hub and args.hub_model_id:
+        print("\nChecking HF Hub for existing checkpoint...")
+        resume_state = _try_resume_from_hub(args.hub_model_id)
+
+    # ------------------------------------------------------------------
+    # 3.  Load model via Unsloth
     # ------------------------------------------------------------------
     try:
         from unsloth import FastLanguageModel
@@ -462,24 +525,37 @@ def main():
         print("\nOr fall back to train_grpo.py")
         raise SystemExit(1) from exc
 
-    print("\nLoading model via Unsloth...")
-    # Unsloth handles 4-bit automatically; pass load_in_4bit for explicit control
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=args.model,
-        load_in_4bit=args.use_4bit,
-        max_seq_length=4096,
-        dtype=torch.bfloat16,
-    )
-
-    print("Adding LoRA adapters...")
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        use_rslora=True,
-        bias="none",
-    )
+    if resume_state:
+        # Load the LoRA adapter that was saved to HF Hub.
+        # FastLanguageModel reads adapter_config.json to fetch the base model
+        # automatically, then applies the saved adapter weights on top.
+        from huggingface_hub import snapshot_download
+        checkpoint_local = snapshot_download(repo_id=args.hub_model_id)
+        print(f"\nLoading checkpoint from {args.hub_model_id} → {checkpoint_local}")
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=checkpoint_local,
+            load_in_4bit=args.use_4bit,
+            max_seq_length=4096,
+            dtype=torch.bfloat16,
+        )
+        print("LoRA adapters restored from checkpoint.")
+    else:
+        print("\nLoading base model via Unsloth...")
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=args.model,
+            load_in_4bit=args.use_4bit,
+            max_seq_length=4096,
+            dtype=torch.bfloat16,
+        )
+        print("Adding LoRA adapters...")
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+            use_rslora=True,
+            bias="none",
+        )
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -498,11 +574,22 @@ def main():
         print("BF16 mixed precision: not available")
 
     # ------------------------------------------------------------------
-    # 2.  Training loop
+    # 4.  Training loop
     # ------------------------------------------------------------------
     num_batches = max(1, args.episodes // args.batch_size)
-    reward_history = []
-    loss_history = []
+
+    # Restore history from a previous run (empty lists on fresh start)
+    reward_history: list = list(resume_state.get("reward_history", []))
+    loss_history: list   = list(resume_state.get("loss_history", []))
+    start_batch: int     = resume_state.get("batch_idx_done", -1) + 1
+
+    if start_batch >= num_batches:
+        print(f"\nAll {num_batches} batches already completed in the previous run. Nothing to do.")
+        return
+
+    if start_batch > 0:
+        print(f"\nResuming: starting at batch {start_batch + 1}/{num_batches}  "
+              f"({len(reward_history)} episodes already logged)")
 
     # Initialize progress tracker
     tracker = TrainingTracker(output_dir=args.output_dir)
@@ -510,15 +597,17 @@ def main():
     plotter = TrainingPlotter(tracker)
     reporter.print_header()
 
-    # Curriculum state
+    # Curriculum state — restore if resuming, otherwise start from scratch
     if args.curriculum:
         curriculum_phases = args.curriculum_phases.split(",")
-        current_phase_idx = 0
-        episodes_in_phase = 0
-        phase_reward_buffer = []
-        current_difficulty = curriculum_phases[0]
+        current_phase_idx  = resume_state.get("current_phase_idx",  0)
+        episodes_in_phase  = resume_state.get("episodes_in_phase",  0)
+        phase_reward_buffer = list(resume_state.get("phase_reward_buffer", []))
+        current_difficulty = resume_state.get(
+            "current_difficulty", curriculum_phases[0]
+        )
         print(f"🎓 Curriculum enabled: {curriculum_phases}")
-        print(f"   Starting at: {current_difficulty}")
+        print(f"   Current phase:  {current_difficulty}  (idx {current_phase_idx})")
     else:
         current_difficulty = args.difficulty
 
@@ -528,7 +617,7 @@ def main():
         trajectory_writer = open(args.trajectory_file, "a", encoding="utf-8")
 
     try:
-        for batch_idx in range(num_batches):
+        for batch_idx in range(start_batch, num_batches):
             batch_start = time.time()
             print(f"\n--- Batch {batch_idx + 1}/{num_batches} ---")
 
@@ -604,6 +693,7 @@ def main():
                                     "reward": ep_reward,
                                     "prompt": step["prompt"],
                                     "completion": step["completion"],
+                                    "obs": step.get("obs", {}),
                                 },
                                 ensure_ascii=False,
                             )
@@ -619,6 +709,7 @@ def main():
             # GRPO update
             torch.cuda.empty_cache()
             gc.collect()
+            model.train()  # Unsloth needs train mode for backward
             optimizer.zero_grad()
             loss = compute_grpo_loss(
                 model,
@@ -628,6 +719,7 @@ def main():
                 micro_batch_size=args.micro_batch_size,
             )
             optimizer.step()
+            model.eval()  # Switch back for next batch's generation
             print(f"Loss: {loss:.4f}")
 
             batch_time = time.time() - batch_start
@@ -647,6 +739,19 @@ def main():
             )
             reporter.print_batch_report(record, tracker.get_summary(), num_batches)
 
+            # Incremental metrics.json — overwrites each batch so data survives a crash
+            _partial = {
+                "episodes_done": (batch_idx + 1) * args.batch_size,
+                "batches_done": batch_idx + 1,
+                "rewards": [float(r) for r in reward_history],
+                "losses": [float(l) for l in loss_history],
+                "batch_records": tracker.records,
+                "summary": tracker.get_summary(),
+                "config": vars(args),
+            }
+            with open(os.path.join(args.output_dir, "metrics.json"), "w") as _mf:
+                json.dump(_partial, _mf)
+
             # Save checkpoint
             episodes_done = (batch_idx + 1) * args.batch_size
             if episodes_done % args.save_every == 0:
@@ -656,6 +761,23 @@ def main():
                 os.makedirs(save_path, exist_ok=True)
                 model.save_pretrained(save_path)
                 tokenizer.save_pretrained(save_path)
+
+                # Save training state for resumability
+                _ts = {
+                    "batch_idx_done": batch_idx,
+                    "reward_history": [float(r) for r in reward_history],
+                    "loss_history":   [float(l) for l in loss_history],
+                    "current_difficulty": current_difficulty,
+                    "current_phase_idx":  current_phase_idx if args.curriculum else 0,
+                    "episodes_in_phase":  episodes_in_phase if args.curriculum else 0,
+                    "phase_reward_buffer": (
+                        [float(x) for x in phase_reward_buffer]
+                        if args.curriculum else []
+                    ),
+                }
+                _ts_path = os.path.join(save_path, "training_state.json")
+                with open(_ts_path, "w") as _tsf:
+                    json.dump(_ts, _tsf)
                 print(f"Saved checkpoint to {save_path}")
 
                 # Push to HF Hub if requested
@@ -663,12 +785,25 @@ def main():
                     try:
                         from huggingface_hub import HfApi
                         api = HfApi()
+                        # Push model weights
                         api.upload_folder(
                             folder_path=save_path,
                             repo_id=args.hub_model_id,
                             repo_type="model",
                             private=args.hub_private,
-                            commit_message=f"Checkpoint after {episodes_done} episodes (reward={mean_reward:.3f})",
+                            commit_message=(
+                                f"Checkpoint after {episodes_done} episodes "
+                                f"(reward={mean_reward:.3f})"
+                            ),
+                        )
+                        # Also push training_state.json to the repo root so that
+                        # --resume-from-hub can find it via hf_hub_download()
+                        api.upload_file(
+                            path_or_fileobj=_ts_path,
+                            path_in_repo="training_state.json",
+                            repo_id=args.hub_model_id,
+                            repo_type="model",
+                            commit_message="Update training state (for resume)",
                         )
                         print(f"Pushed checkpoint to https://huggingface.co/{args.hub_model_id}")
                     except Exception as e:
@@ -680,6 +815,22 @@ def main():
         os.makedirs(interrupt_path, exist_ok=True)
         model.save_pretrained(interrupt_path)
         tokenizer.save_pretrained(interrupt_path)
+        # Save training state so the run is resumable
+        _last_batch = start_batch + len(tracker.records) - 1
+        _ts_int = {
+            "batch_idx_done": _last_batch,
+            "reward_history": [float(r) for r in reward_history],
+            "loss_history":   [float(l) for l in loss_history],
+            "current_difficulty": current_difficulty,
+            "current_phase_idx":  current_phase_idx if args.curriculum else 0,
+            "episodes_in_phase":  episodes_in_phase if args.curriculum else 0,
+            "phase_reward_buffer": (
+                [float(x) for x in phase_reward_buffer] if args.curriculum else []
+            ),
+        }
+        _ts_int_path = os.path.join(interrupt_path, "training_state.json")
+        with open(_ts_int_path, "w") as _f:
+            json.dump(_ts_int, _f)
         print(f"Saved emergency checkpoint to {interrupt_path}")
         if args.push_to_hub and args.hub_model_id:
             try:
@@ -691,6 +842,13 @@ def main():
                     repo_type="model",
                     private=args.hub_private,
                     commit_message="Emergency interrupt checkpoint",
+                )
+                api.upload_file(
+                    path_or_fileobj=_ts_int_path,
+                    path_in_repo="training_state.json",
+                    repo_id=args.hub_model_id,
+                    repo_type="model",
+                    commit_message="Update training state (interrupted)",
                 )
                 print(f"Pushed emergency checkpoint to https://huggingface.co/{args.hub_model_id}")
             except Exception as e:
@@ -704,6 +862,22 @@ def main():
     os.makedirs(final_path, exist_ok=True)
     model.save_pretrained(final_path)
     tokenizer.save_pretrained(final_path)
+    # Mark training as complete in the state file so resume doesn't re-run
+    _ts_final = {
+        "batch_idx_done": num_batches - 1,
+        "training_complete": True,
+        "reward_history": [float(r) for r in reward_history],
+        "loss_history":   [float(l) for l in loss_history],
+        "current_difficulty": current_difficulty,
+        "current_phase_idx":  current_phase_idx if args.curriculum else 0,
+        "episodes_in_phase":  episodes_in_phase if args.curriculum else 0,
+        "phase_reward_buffer": (
+            [float(x) for x in phase_reward_buffer] if args.curriculum else []
+        ),
+    }
+    _ts_final_path = os.path.join(final_path, "training_state.json")
+    with open(_ts_final_path, "w") as _f:
+        json.dump(_ts_final, _f)
     print(f"Saved final checkpoint to {final_path}")
     if args.push_to_hub and args.hub_model_id:
         try:
@@ -714,7 +888,14 @@ def main():
                 repo_id=args.hub_model_id,
                 repo_type="model",
                 private=args.hub_private,
-                commit_message="Final checkpoint",
+                commit_message="Final checkpoint — training complete",
+            )
+            api.upload_file(
+                path_or_fileobj=_ts_final_path,
+                path_in_repo="training_state.json",
+                repo_id=args.hub_model_id,
+                repo_type="model",
+                commit_message="Final training state",
             )
             print(f"Pushed final checkpoint to https://huggingface.co/{args.hub_model_id}")
         except Exception as e:

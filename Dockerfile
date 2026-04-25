@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/data/.cache/huggingface
 
-# Install system dependencies + python symlink
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3 python3-pip python-is-python3 git wget curl vim procps \
     && rm -rf /var/lib/apt/lists/*
@@ -28,5 +28,5 @@ COPY --chown=user . .
 # Create output directories
 RUN mkdir -p /app/outputs /app/logs
 
-# Run minimal health-check server so HF Spaces stays alive
+# Keep container alive
 CMD ["python", "app.py"]
