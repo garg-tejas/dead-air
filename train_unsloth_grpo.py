@@ -36,20 +36,19 @@ from server.grpo_env_wrapper import DeadAirGRPOEnv
 from server.unsloth_grpo_utils import compute_grpo_loss
 
 SYSTEM_PROMPT = (
-    "You are an emergency dispatch commander for a 20-node city. "
-    "You have 6 units and must respond to emergency calls. "
-    "Minimize fatalities and response time.\n\n"
-    "AVAILABLE ACTIONS (respond with exactly one JSON object):\n"
+    "You are an emergency dispatch AI managing 6 ambulance units in a 20-node city. "
+    "Every step, output exactly one JSON object on the VERY LAST LINE.\n\n"
+    "RULES:\n"
+    "- If Active Calls is empty or says '(none)', output: {\"action_type\":\"hold\"}\n"
+    "- If there are active calls, dispatch the closest idle unit to the most urgent call.\n"
+    "- Keep reasoning to 1-2 sentences. Do not overthink.\n"
+    "- The JSON must be the very last thing you output. No markdown, no extra text after it.\n\n"
+    "ACTIONS:\n"
     '{"action_type":"dispatch","unit_id":0,"call_id":1}\n'
-    '{"action_type":"reroute","unit_id":0,"call_id":1}\n'
-    '{"action_type":"stage","unit_id":0,"location_node":5}\n'
-    '{"action_type":"divert","unit_id":0,"hospital_id":1}\n'
-    '{"action_type":"verify","call_id":1}\n'
-    '{"action_type":"request_mutual_aid"}\n'
-    '{"action_type":"log","note":"short plain text note"}\n'
-    '{"action_type":"hold"}\n\n'
-    "Think step by step about which calls are most urgent and which units are closest. "
-    "Then output ONLY the JSON action on the LAST line. No markdown, no quotes around the JSON."
+    '{"action_type":"hold"}\n'
+    '{"action_type":"verify","call_id":1}\n\n'
+    "Example (no calls): All units idle, no active calls. {\"action_type\":\"hold\"}\n"
+    "Example (with calls): Call 2 is cardiac (most urgent). Unit 1 is idle and closest. {\"action_type\":\"dispatch\",\"unit_id\":1,\"call_id\":2}"
 )
 
 
@@ -68,11 +67,15 @@ def format_observation(obs: Dict) -> str:
         )
     lines.append("")
     lines.append("## Active Calls")
-    for c in obs.get("active_calls", []):
-        assigned = f" (Unit {c['assigned_unit']})" if c.get("assigned_unit") else ""
-        lines.append(
-            f"- Call {c['call_id']}: {c['reported_type']} at Node {c['location']} ({c['caller_tone']}) elapsed={c['time_elapsed']}min{assigned}"
-        )
+    active_calls = obs.get("active_calls", [])
+    if active_calls:
+        for c in active_calls:
+            assigned = f" (Unit {c['assigned_unit']})" if c.get("assigned_unit") else ""
+            lines.append(
+                f"- Call {c['call_id']}: {c['reported_type']} at Node {c['location']} ({c['caller_tone']}) elapsed={c['time_elapsed']}min{assigned}"
+            )
+    else:
+        lines.append("(none)")
     lines.append("")
     lines.append("## Traffic & Hospitals")
     for alert in obs.get("traffic_alerts", []):
