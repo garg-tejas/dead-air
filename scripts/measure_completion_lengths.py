@@ -9,6 +9,10 @@ length of every completion. The stats tell you what max_completion_length
 to use for training (recommendation: p95 + 20% headroom).
 """
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import argparse
 import json
 import statistics

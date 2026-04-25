@@ -16,7 +16,7 @@ class DispatchRGRPOEnv:
     """Wrapper that exposes DispatchR as a tool-using environment for TRL GRPO.
 
     Each public method becomes a tool the LLM can call. The episode advances
-    one step per tool call (except verify, which is free).
+    one step per tool call.
 
     Also supports ``step(text)`` for raw-completion parsing (used when the
     model outputs free-form text rather than structured tool calls).
@@ -271,7 +271,9 @@ class DispatchRGRPOEnv:
         return self._step({"action_type": "log", "note": note})
 
     def verify(self, call_id: int) -> str:
-        """Run a background check on a call (consumes one step).
+        """Run a background check on a call.
+
+        NOTE: This consumes one environment step (advances step_count).
 
         Args:
             call_id: The call to verify.

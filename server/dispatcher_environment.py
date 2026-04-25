@@ -224,11 +224,14 @@ class DispatcherEnvironment(Environment):
                 new_arrivals.append(aid)
         self._mutual_aid_arrivals = new_arrivals
 
-        # Mark fatalities for unresolved calls that exceeded deadline
-        for call in self.call_generator.get_active():
-            if not call.get("resolved", False):
-                if call["time_elapsed"] > call.get("effective_deadline", float("inf")):
-                    call["fatality"] = True
+        # Mark fatalities for calls that exceeded deadline.
+        # Must check BOTH active and resolved calls because a call can be
+        # resolved (cleared) after its deadline has already passed.
+        for call in self.call_generator.active_calls + self.call_generator.resolved_calls:
+            if call.get("fatality"):
+                continue
+            if call["time_elapsed"] > call.get("effective_deadline", float("inf")):
+                call["fatality"] = True
 
         # Accumulate coverage score per-step (time-averaged)
         if self._compute_coverage(self.units) == 1.0:
@@ -252,7 +255,8 @@ class DispatcherEnvironment(Environment):
                 unit_start_locations=self._unit_start_locations,
                 coverage_score=coverage_score,
             )
-            reward = result["episode_reward"]
+            # Start from base reward (includes perfect-run bonus if earned)
+            reward = result["total_reward"]
 
             # Apply action-validity shaping (anti-hacking layer)
             # Valid actions are rewarded; invalid actions and excessive holding are penalized
@@ -265,7 +269,7 @@ class DispatcherEnvironment(Environment):
                 invalidity_penalty = (self._invalid_action_count / total_actions) * 0.05
                 idle_penalty = (self._hold_count / total_actions) * 0.02
                 reward = reward + validity_bonus - invalidity_penalty - idle_penalty
-                reward = max(0.0, min(1.0, reward))
+                reward = max(0.0, reward)  # Allow >1.0 so perfect-run bonus is not clipped
 
             # Attach step-level metrics to result for inspection
             result["validity_bonus"] = validity_bonus if total_actions > 0 else 0.0

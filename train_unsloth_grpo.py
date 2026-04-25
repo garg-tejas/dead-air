@@ -17,7 +17,7 @@ Usage (on Lightning AI L4):
         --batch-size 8
 """
 
-import unsloth  # Must be first, before transformers
+from unsloth import FastLanguageModel
 
 import argparse
 import copy
@@ -39,107 +39,9 @@ warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
 
 from server.constants import MAX_STEPS
 from server.grpo_env_wrapper import DispatchRGRPOEnv
+from server.prompt_utils import SYSTEM_PROMPT, build_chat_prompt, format_observation
 from server.training_tracker import ConsoleReporter, TrainingPlotter, TrainingTracker
 from server.unsloth_grpo_utils import compute_grpo_loss
-
-
-def _try_resume_from_hub(hub_model_id: str) -> dict:
-    """Download training_state.json from HF Hub if it exists.
-
-    Returns the state dict on success, or an empty dict if no checkpoint found.
-    The state contains batch_idx_done, reward/loss history, and curriculum state.
-    """
-    try:
-        from huggingface_hub import hf_hub_download
-        state_path = hf_hub_download(
-            repo_id=hub_model_id,
-            filename="training_state.json",
-        )
-        with open(state_path) as f:
-            state = json.load(f)
-        print(
-            f"  Found checkpoint: batch {state.get('batch_idx_done', 0) + 1} done, "
-            f"difficulty={state.get('current_difficulty', '?')}, "
-            f"{len(state.get('reward_history', []))} episodes logged."
-        )
-        return state
-    except Exception as e:
-        print(f"  No existing checkpoint ({type(e).__name__}: {e})")
-        return {}
-
-SYSTEM_PROMPT = (
-    "You are an emergency dispatch AI managing 6 ambulance units in a 20-node city. "
-    "Every step, output exactly one JSON object on the VERY LAST LINE.\n\n"
-    "RULES:\n"
-    "- If Active Calls is empty or says '(none)', output: {\"action_type\":\"hold\"}\n"
-    "- If there are active calls, dispatch the closest idle unit to the most urgent call.\n"
-    "- Keep reasoning to 1-2 sentences. Do not overthink.\n"
-    "- The JSON must be the very last thing you output. No markdown, no extra text after it.\n\n"
-    "ACTIONS:\n"
-    '{"action_type":"dispatch","unit_id":0,"call_id":1}\n'
-    '{"action_type":"hold"}\n'
-    '{"action_type":"verify","call_id":1}\n\n'
-    "Example (no calls): All units idle, no active calls. {\"action_type\":\"hold\"}\n"
-    "Example (with calls): Call 2 is cardiac (most urgent). Unit 1 is idle and closest. {\"action_type\":\"dispatch\",\"unit_id\":1,\"call_id\":2}"
-)
-
-
-def format_observation(obs: Dict) -> str:
-    """Format env observation into prompt text."""
-    lines = [
-        "# Emergency Dispatch Commander",
-        f"Step {obs['step_number']}/{obs['max_steps']}",
-        "",
-        "## Units",
-    ]
-    for u in obs.get("unit_statuses", []):
-        call_info = f" -> Call {u['current_call']}" if u.get("current_call") else ""
-        lines.append(
-            f"- Unit {u['unit_id']}: {u['last_known_status']} at Node {u['last_known_location']}{call_info}"
-        )
-    lines.append("")
-    lines.append("## Active Calls")
-    active_calls = obs.get("active_calls", [])
-    if active_calls:
-        for c in active_calls:
-            assigned = f" (Unit {c['assigned_unit']})" if c.get("assigned_unit") else ""
-            lines.append(
-                f"- Call {c['call_id']}: {c['reported_type']} at Node {c['location']} ({c['caller_tone']}) elapsed={c['time_elapsed']}min{assigned}"
-            )
-    else:
-        lines.append("(none)")
-    lines.append("")
-    lines.append("## Traffic & Hospitals")
-    for alert in obs.get("traffic_alerts", []):
-        lines.append(f"- {alert}")
-    for h in obs.get("hospital_statuses", []):
-        lines.append(f"- Hospital {h['hospital_id']}: {h['reported_status']}")
-    lines.append("")
-    lines.append(f"Mutual aid remaining: {obs['mutual_aid_remaining']}")
-    lines.append("")
-    lines.append("Choose your next action.")
-    return "\n".join(lines)
-
-
-def build_chat_prompt(tokenizer, system: str, user: str) -> str:
-    """Build a chat-formatted prompt using the tokenizer's chat template."""
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
-    if tokenizer.chat_template is not None:
-        try:
-            return tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-                chat_template_kwargs={"enable_thinking": True},
-            )
-        except TypeError:
-            return tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-    return f"{system}\n\n{user}\n\nAssistant:"
 
 
 def greedy_action(obs: Dict) -> Dict:
@@ -520,17 +422,6 @@ def main():
         print("\nChecking HF Hub for existing checkpoint...")
         resume_state = _try_resume_from_hub(args.hub_model_id)
 
-    # ------------------------------------------------------------------
-    # 3.  Load model via Unsloth
-    # ------------------------------------------------------------------
-    try:
-        from unsloth import FastLanguageModel
-    except ImportError as exc:
-        print("\nERROR: Unsloth is not installed.")
-        print("Install it with: pip install unsloth")
-        print("\nOr fall back to train_grpo.py")
-        raise SystemExit(1) from exc
-
     if resume_state:
         # Load the LoRA adapter that was saved to HF Hub.
         # FastLanguageModel reads adapter_config.json to fetch the base model
@@ -580,7 +471,7 @@ def main():
         print("BF16 mixed precision: not available")
 
     # ------------------------------------------------------------------
-    # 4.  Training loop
+    # 3.  Training loop
     # ------------------------------------------------------------------
     num_batches = max(1, args.episodes // args.batch_size)
 
@@ -724,6 +615,7 @@ def main():
                 rewards,
                 micro_batch_size=args.micro_batch_size,
             )
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             model.eval()  # Switch back for next batch's generation
             print(f"Loss: {loss:.4f}")
