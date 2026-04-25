@@ -25,12 +25,17 @@ import gc
 import json
 import os
 import time
+import warnings
 from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer
+
+# Suppress noisy transformers deprecation warnings during training
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
+warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
 
 from server.constants import MAX_STEPS
 from server.grpo_env_wrapper import DispatchRGRPOEnv
@@ -231,6 +236,7 @@ def run_episodes_batched(
             output_sequences = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
+                max_length=None,  # Prevent conflict with model generation_config
                 do_sample=True,
                 temperature=0.7,
                 top_p=0.9,
@@ -377,7 +383,7 @@ def main():
     parser.add_argument("--difficulty", type=str, default="learning")
     parser.add_argument("--output-dir", type=str, default="./outputs/unsloth_grpo")
     parser.add_argument("--save-every", type=int, default=50)
-    parser.add_argument("--max-completion-length", type=int, default=512)
+    parser.add_argument("--max-completion-length", type=int, default=1536)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(

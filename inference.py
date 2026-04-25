@@ -17,9 +17,15 @@ import argparse
 import copy
 import json
 import os
+import warnings
 from typing import Dict, List, Optional
 
 import torch
+
+# Suppress noisy transformers deprecation warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
+warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
+
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from server.grpo_env_wrapper import DispatchRGRPOEnv
@@ -113,6 +119,7 @@ def generate_action(
         outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
+            max_length=None,  # Prevent conflict with model generation_config
             do_sample=True,
             temperature=0.7,
             top_p=0.9,
@@ -191,7 +198,7 @@ def main():
         "--difficulty", type=str, default="expert", help="Difficulty phase: warmup, learning, advanced, expert"
     )
     parser.add_argument(
-        "--max-new-tokens", type=int, default=512, help="Max tokens per generation"
+        "--max-new-tokens", type=int, default=1536, help="Max tokens per generation"
     )
     parser.add_argument(
         "--max-steps", type=int, default=80, help="Max steps per episode"
