@@ -28,5 +28,5 @@ COPY --chown=user . .
 # Create output directories
 RUN mkdir -p /app/outputs /app/logs
 
-# Keep container alive for training
-CMD ["sleep", "infinity"]
+# Run minimal health-check server so HF Spaces stays alive
+CMD ["python", "app.py"]
