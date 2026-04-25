@@ -388,6 +388,36 @@ def main():
         help="JSONL file to save full prompt + generated text for every step. "
              "Useful for auditing model behaviour.",
     )
+    parser.add_argument(
+        "--curriculum",
+        action="store_true",
+        help="Enable performance-gated curriculum learning. Difficulty auto-escalates "
+             "when mean batch reward stays above threshold.",
+    )
+    parser.add_argument(
+        "--curriculum-phases",
+        type=str,
+        default="warmup,learning,advanced,expert",
+        help="Comma-separated difficulty phases (default: warmup,learning,advanced,expert).",
+    )
+    parser.add_argument(
+        "--curriculum-min-episodes",
+        type=int,
+        default=30,
+        help="Minimum episodes per phase before escalation (default: 30).",
+    )
+    parser.add_argument(
+        "--curriculum-escalate-threshold",
+        type=float,
+        default=0.65,
+        help="Mean reward threshold to escalate (default: 0.65).",
+    )
+    parser.add_argument(
+        "--curriculum-window",
+        type=int,
+        default=3,
+        help="Number of recent batches to average for escalation check (default: 3).",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -456,6 +486,19 @@ def main():
     num_batches = max(1, args.episodes // args.batch_size)
     reward_history = []
     loss_history = []
+
+    # Curriculum state
+    if args.curriculum:
+        curriculum_phases = args.curriculum_phases.split(",")
+        current_phase_idx = 0
+        episodes_in_phase = 0
+        phase_reward_buffer = []
+        current_difficulty = curriculum_phases[0]
+        print(f"🎓 Curriculum enabled: {curriculum_phases}")
+        print(f"   Starting at: {current_difficulty}")
+    else:
+        current_difficulty = args.difficulty
+
     trajectory_writer = None
     if args.trajectory_file:
         os.makedirs(os.path.dirname(args.trajectory_file) or ".", exist_ok=True)
@@ -479,7 +522,7 @@ def main():
             envs = [
                 DeadAirGRPOEnv(
                     seed=args.seed + batch_idx * args.batch_size + i,
-                    difficulty=args.difficulty,
+                    difficulty=current_difficulty,
                 )
                 for i in range(args.batch_size)
             ]
@@ -502,6 +545,34 @@ def main():
                 f"Mean reward: {mean_reward:.4f} | Non-zero: {non_zero}/{len(rewards)} | "
                 f"Total steps: {total_steps}"
             )
+
+            # Curriculum: update phase based on recent performance
+            if args.curriculum:
+                episodes_in_phase += len(rewards)
+                phase_reward_buffer.append(mean_reward)
+                if len(phase_reward_buffer) > args.curriculum_window:
+                    phase_reward_buffer.pop(0)
+
+                print(
+                    f"Curriculum: phase={current_difficulty} | "
+                    f"episodes_in_phase={episodes_in_phase} | "
+                    f"window_reward_avg={sum(phase_reward_buffer)/len(phase_reward_buffer):.4f}"
+                )
+
+                if (
+                    episodes_in_phase >= args.curriculum_min_episodes
+                    and len(phase_reward_buffer) >= args.curriculum_window
+                    and (sum(phase_reward_buffer) / len(phase_reward_buffer)) >= args.curriculum_escalate_threshold
+                    and current_phase_idx < len(curriculum_phases) - 1
+                ):
+                    current_phase_idx += 1
+                    current_difficulty = curriculum_phases[current_phase_idx]
+                    episodes_in_phase = 0
+                    phase_reward_buffer = []
+                    print(
+                        f"🎓 CURRICULUM ESCALATED to {current_difficulty}! "
+                        f"({args.curriculum_min_episodes}+ episodes, reward >= {args.curriculum_escalate_threshold})"
+                    )
 
             # Save trajectory for auditing
             if trajectory_writer:
