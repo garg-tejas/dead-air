@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch Dead Air GRPO training on Hugging Face Spaces GPU.
+"""Launch DispatchR GRPO training on Hugging Face Spaces GPU.
 
 Usage:
     export HF_TOKEN=hf_...
@@ -20,7 +20,7 @@ from datetime import datetime
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Launch Dead Air training on HF Spaces")
+    parser = argparse.ArgumentParser(description="Launch DispatchR training on HF Spaces")
     parser.add_argument("--model", type=str, default="unsloth/Qwen3-14B-unsloth-bnb-4bit",
                         help="Unsloth model to train (default: 14B)")
     parser.add_argument("--episodes", type=int, default=200)
@@ -45,7 +45,7 @@ def main():
         sys.exit(1)
 
     print("=" * 60)
-    print("Dead Air HF Spaces Training Launcher")
+    print("DispatchR HF Spaces Training Launcher")
     print("=" * 60)
     print(f"Model: {args.model}")
     print(f"Episodes: {args.episodes}")

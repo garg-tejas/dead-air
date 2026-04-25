@@ -1,4 +1,4 @@
-"""Data models for the Dead Air emergency dispatch environment."""
+"""Data models for the DispatchR emergency dispatch environment."""
 
 from typing import Any, Dict, List, Optional
 

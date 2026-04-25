@@ -1,4 +1,4 @@
-"""Utilities for Unsloth-based GRPO training on Dead Air.
+"""Utilities for Unsloth-based GRPO training on DispatchR.
 
 Provides fast generation, episode-level GRPO loss computation,
 and reward shaping with a conditional arrival bonus.

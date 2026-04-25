@@ -1,4 +1,4 @@
-"""Dead Air Environment Client."""
+"""DispatchR Environment Client."""
 
 from typing import Dict
 
@@ -9,8 +9,8 @@ from openenv.core.env_server.types import State
 from .models import DispatchAction, DispatchObservation
 
 
-class EmergencyDispatcherClient(EnvClient[DispatchAction, DispatchObservation, State]):
-    """Client for the Dead Air Dispatcher Environment."""
+class EmergencyDispatcherClient:
+    """Client for the DispatchR Dispatcher Environment."""
 
     def _step_payload(self, action: DispatchAction) -> Dict:
         return {

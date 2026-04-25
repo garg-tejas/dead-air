@@ -1,4 +1,4 @@
-"""Unsloth-based GRPO training for Dead Air.
+"""Unsloth-based GRPO training for DispatchR.
 
 Uses Unsloth's FastLanguageModel for optimized 4-bit kernels.
 The training loop mirrors train_grpo.py but swaps in Unsloth model loading.
@@ -32,7 +32,7 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer
 
 from server.constants import MAX_STEPS
-from server.grpo_env_wrapper import DeadAirGRPOEnv
+from server.grpo_env_wrapper import DispatchRGRPOEnv
 from server.unsloth_grpo_utils import compute_grpo_loss
 
 SYSTEM_PROMPT = (
@@ -143,7 +143,7 @@ def greedy_action(obs: Dict) -> Dict:
 def run_episodes_batched(
     model,
     tokenizer,
-    envs: List[DeadAirGRPOEnv],
+    envs: List[DispatchRGRPOEnv],
     max_steps: int,
     max_new_tokens: int,
     device: str,
@@ -331,7 +331,7 @@ def run_episodes_batched(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Dead Air GRPO training with Unsloth"
+        description="DispatchR GRPO training with Unsloth"
     )
     parser.add_argument(
         "--model",
@@ -427,7 +427,7 @@ def main():
         "--hub-model-id",
         type=str,
         default=None,
-        help="HF Hub model ID to push checkpoints to (e.g., 'username/dead-air-grpo').",
+        help="HF Hub model ID to push checkpoints to (e.g., 'username/dispatchr-grpo').",
     )
     parser.add_argument(
         "--hub-private",
@@ -443,7 +443,7 @@ def main():
         torch.cuda.manual_seed_all(args.seed)
 
     print("=" * 60)
-    print("Dead Air Unsloth GRPO Training")
+    print("DispatchR Unsloth GRPO Training")
     print(f"Model: {args.model}")
     print(f"Episodes: {args.episodes}")
     print(f"Batch size: {args.batch_size}")
@@ -536,7 +536,7 @@ def main():
 
             # Collect episodes (batched)
             envs = [
-                DeadAirGRPOEnv(
+                DispatchRGRPOEnv(
                     seed=args.seed + batch_idx * args.batch_size + i,
                     difficulty=current_difficulty,
                 )

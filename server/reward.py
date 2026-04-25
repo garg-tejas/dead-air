@@ -1,4 +1,4 @@
-"""Reward computation for Dead Air environment."""
+"""Reward computation for DispatchR environment."""
 
 from typing import Any, Dict, List, Optional
 

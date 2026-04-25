@@ -9,9 +9,9 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openenv-dead_air"
+name = "openenv-dispatchr"
 version = "0.1.0"
-description = "Dead Air: Emergency Dispatch RL Environment for OpenEnv"
+description = "DispatchR: Emergency Dispatch RL Environment for OpenEnv"
 requires-python = ">=3.10"
 dependencies = [
     "openenv-core[core]>=0.2.3",
@@ -40,9 +40,9 @@ dev = [
 ]
 
 [project.scripts]
-server = "dead_air.server.app:main"
+server = "dispatchr.server.app:main"
 
 [tool.setuptools]
 include-package-data = true
-packages = ["dead_air", "dead_air.server"]
-package-dir = { "dead_air" = ".", "dead_air.server" = "server" }
+packages = ["dispatchr", "dispatchr.server"]
+package-dir = { "dispatchr" = ".", "dispatchr.server" = "server" }

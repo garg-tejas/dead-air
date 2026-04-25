@@ -1,5 +1,5 @@
 #!/bin/bash
-# Dead Air Training Launch Script for HF Spaces
+# DispatchR Training Launch Script for HF Spaces
 # Run this inside the Space terminal after build completes
 
 set -e
@@ -10,7 +10,7 @@ BATCH_SIZE=${3:-8}
 HUB_MODEL_ID=${4:-""}
 
 echo "========================================"
-echo "Dead Air Training Launcher"
+echo "DispatchR HF Spaces Training Launcher"
 echo "========================================"
 echo "Model: $MODEL"
 echo "Episodes: $EPISODES"

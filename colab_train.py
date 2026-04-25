@@ -1,4 +1,4 @@
-"""Colab debug training script for Dead Air with Unsloth (or fallback).
+"""Colab debug training script for DispatchR with Unsloth (or fallback).
 
 Usage in Colab:
     !python colab_train.py --episodes 10 --batch-size 4 --debug-steps 3
@@ -38,12 +38,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Import from repo if available
 try:
-    from server.grpo_env_wrapper import DeadAirGRPOEnv
-    print("[OK] Imported DeadAirGRPOEnv from repo")
+    from server.grpo_env_wrapper import DispatchRGRPOEnv
+    print("[OK] Imported DispatchRGRPOEnv from repo")
 except ImportError:
     sys.path.insert(0, ".")
-    from server.grpo_env_wrapper import DeadAirGRPOEnv
-    print("[OK] Imported DeadAirGRPOEnv from repo (after path fix)")
+    from server.grpo_env_wrapper import DispatchRGRPOEnv
+    print("[OK] Imported DispatchRGRPOEnv from repo (after path fix)")
 
 
 # ------------------------------------------------------------------
@@ -230,7 +230,7 @@ def run_debug_training(
     device = next(model.parameters()).device
 
     for ep in range(num_episodes):
-        env = DeadAirGRPOEnv(seed=seed + ep, difficulty=difficulty)
+        env = DispatchRGRPOEnv(seed=seed + ep, difficulty=difficulty)
         env.reset()
         ep_reward = None
         ep_log = {"episode": ep, "steps": [], "reward": None}
@@ -291,7 +291,7 @@ def run_debug_training(
 # 7.  Main
 # ------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Dead Air debug training on Colab")
+    parser = argparse.ArgumentParser(description="DispatchR debug training on Colab")
     parser.add_argument("--model", type=str, default="unsloth/Qwen3.5-2B", help="HF model ID")
     parser.add_argument("--episodes", type=int, default=10, help="Number of episodes")
     parser.add_argument("--max-steps", type=int, default=25, help="Max steps per episode")
@@ -305,7 +305,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     print("=" * 60)
-    print("Dead Air Colab Debug Training")
+    print("DispatchR Colab Debug Training")
     print(f"Model: {args.model}")
     print(f"Episodes: {args.episodes}")
     print(f"Unsloth: {not args.no_unsloth and USE_UNSLOTH}")

@@ -1,4 +1,4 @@
-"""Interactive demo script for Dead Air environment.
+"""Interactive demo script for DispatchR environment.
 
 Run:
     uv run python demo.py --episodes 3 --difficulty learning

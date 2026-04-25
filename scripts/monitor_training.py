@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Monitor Dead Air training progress on HF Spaces.
+"""Monitor DispatchR training progress on HF Spaces.
 
 Usage:
     python scripts/monitor_training.py
@@ -112,7 +112,7 @@ def get_trajectory_stats():
 
 def main():
     print("=" * 60)
-    print("Dead Air Training Monitor")
+    print("DispatchR Training Monitor")
     print("=" * 60)
     print("")
 

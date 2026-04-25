@@ -1,6 +1,6 @@
-"""GRPO-compatible environment wrapper for Dead Air.
+"""GRPO-compatible environment wrapper for DispatchR.
 
-Exposes Dead Air dispatch actions as tools for TRL's GRPOTrainer
+Exposes DispatchR dispatch actions as tools for TRL's GRPOTrainer
 with environment_factory support.
 """
 
@@ -12,8 +12,8 @@ from .constants import MAX_STEPS
 from .dispatcher_environment import DispatcherEnvironment
 
 
-class DeadAirGRPOEnv:
-    """Wrapper that exposes Dead Air as a tool-using environment for TRL GRPO.
+class DispatchRGRPOEnv:
+    """Wrapper that exposes DispatchR as a tool-using environment for TRL GRPO.
 
     Each public method becomes a tool the LLM can call. The episode advances
     one step per tool call (except verify, which is free).

@@ -1,5 +1,5 @@
 ---
-title: Dead Air Environment Server
+title: DispatchR Environment Server
 emoji: 🚑
 colorFrom: red
 colorTo: blue
@@ -14,9 +14,9 @@ tags:
   - long-horizon
 ---
 
-# Dead Air
+# DispatchR
 
-**Dead Air** (noun, emergency services slang): The silence on the radio when a unit stops checking in. The moment a dispatcher must decide whether to trust the last known position — or assume the worst.
+**DispatchR** — where **R**einforcement Learning meets emergency **R**esponse. Training AI dispatchers to make life-or-death decisions under uncertainty, radio silence, and chaos.
 
 A reinforcement learning environment for emergency medical dispatch, built for the Meta OpenEnv Hackathon (India, April 2026).
 
@@ -24,7 +24,7 @@ A reinforcement learning environment for emergency medical dispatch, built for t
 
 ## What It Is
 
-Dead Air simulates an 8-hour shift for an emergency dispatch commander in a 20-node city. The agent must:
+DispatchR simulates an 8-hour shift for an emergency dispatch commander in a 20-node city. The agent must:
 
 - Dispatch 6 units to cardiac, trauma, and fire emergencies
 - Deal with radio delays (statuses lag 2-3 steps behind reality)

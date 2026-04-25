@@ -1,5 +1,5 @@
 spec_version: 1
-name: dead_air
+name: dispatchr
 type: space
 runtime: fastapi
 app: server.app:app

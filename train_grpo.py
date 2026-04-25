@@ -1,4 +1,4 @@
-"""GRPO training with batched generation for Dead Air environment.
+"""GRPO training with batched generation for DispatchR environment.
 
 Compatible with TRL >= 0.15. Uses standard transformers + PEFT.
 No vLLM required — batched transformers generation is fast enough for
@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from server.constants import MAX_STEPS
-from server.grpo_env_wrapper import DeadAirGRPOEnv
+from server.grpo_env_wrapper import DispatchRGRPOEnv
 
 SYSTEM_PROMPT = (
     "You are an emergency dispatch AI managing 6 ambulance units in a 20-node city. "
@@ -138,7 +138,7 @@ def greedy_action(obs: Dict) -> Dict:
 def run_episodes_batched(
     model,
     tokenizer,
-    envs: List[DeadAirGRPOEnv],
+    envs: List[DispatchRGRPOEnv],
     max_steps: int,
     max_new_tokens: int,
     device: str,
@@ -541,7 +541,7 @@ def main():
     np.random.seed(args.seed)
 
     print("=" * 60)
-    print("Dead Air GRPO Training (Batched Generation)")
+    print("DispatchR GRPO Training (Batched Generation)")
     print(f"Model: {args.model}")
     print(f"Episodes: {args.episodes}")
     print(f"Batch size: {args.batch_size}")
@@ -702,7 +702,7 @@ def main():
 
             # Collect episodes (batched)
             envs = [
-                DeadAirGRPOEnv(
+                DispatchRGRPOEnv(
                     seed=args.seed + batch_idx * args.batch_size + i,
                     difficulty=current_difficulty,
                 )

@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def plot_rewards(rewards: list, output: str = "training_reward.png", title: str = "Dead Air Training Reward"):
+def plot_rewards(rewards: list, output: str = "training_reward.png", title: str = "DispatchR Training Reward"):
     """Plot reward curve with moving average."""
     plt.figure(figsize=(12, 5))
 

@@ -1,4 +1,4 @@
-"""Dead Air Environment."""
+"""DispatchR Environment."""
 
 from client import EmergencyDispatcherClient
 from models import (

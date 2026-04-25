@@ -1,4 +1,4 @@
-"""Constants and configuration for the Dead Air environment."""
+"""Constants and configuration for the DispatchR environment."""
 
 from typing import Any, Dict, List, Tuple
 

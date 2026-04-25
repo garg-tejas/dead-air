@@ -9,7 +9,7 @@ ax.set_ylim(0, 10)
 ax.axis("off")
 
 # Title
-ax.text(5, 9.5, "Dead Air Architecture", ha="center", va="top", fontsize=18, fontweight="bold")
+    ax.text(5, 9.5, "DispatchR Architecture", ha="center", va="top", fontsize=18, fontweight="bold")
 
 # Agent box
 agent = mpatches.FancyBboxPatch((3.5, 6.5), 3, 1.5, boxstyle="round,pad=0.1", facecolor="#4a90d9", edgecolor="black")

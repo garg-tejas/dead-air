@@ -1,4 +1,4 @@
-"""FastAPI application for the Dead Air Environment."""
+"""FastAPI application for the DispatchR Environment."""
 
 try:
     from openenv.core import create_app
@@ -26,7 +26,7 @@ app = create_app(
     DispatcherEnvironment,
     DispatchAction,
     DispatchObservation,
-    env_name="dead_air",
+    env_name="dispatchr",
     max_concurrent_envs=4,
 )
 

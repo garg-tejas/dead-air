@@ -1,4 +1,4 @@
-"""Unit state machine and radio delay buffer for Dead Air."""
+"""Unit state machine and radio delay buffer for DispatchR."""
 
 from typing import Any, Dict, List, Optional, Tuple
 

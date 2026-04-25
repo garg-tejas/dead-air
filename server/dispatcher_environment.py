@@ -1,4 +1,4 @@
-"""Dispatcher environment: core reset/step loop for Dead Air."""
+"""Dispatcher environment: core reset/step loop for DispatchR."""
 
 from typing import Any, Dict, List, Optional
 from uuid import uuid4

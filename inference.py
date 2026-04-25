@@ -1,4 +1,4 @@
-"""Run inference with a trained checkpoint.
+"""Run inference with a trained DispatchR checkpoint.
 
 Uses the same prompt format and stepping logic as train_grpo.py.
 
@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from server.grpo_env_wrapper import DeadAirGRPOEnv
+from server.grpo_env_wrapper import DispatchRGRPOEnv
 
 SYSTEM_PROMPT = (
     "You are an emergency dispatch AI managing 6 ambulance units in a 20-node city. "
@@ -119,7 +119,7 @@ def generate_action(
 
 
 def run_episode(
-    env: DeadAirGRPOEnv,
+    env: DispatchRGRPOEnv,
     model,
     tokenizer,
     max_steps: int,
@@ -168,7 +168,7 @@ def run_episode(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run inference with a trained Dead Air checkpoint"
+        description="Run inference with a trained DispatchR checkpoint"
     )
     parser.add_argument(
         "--model-path", type=str, required=True, help="Path to trained checkpoint or HF model ID"
@@ -206,7 +206,7 @@ def main():
     results = []
 
     for ep in range(args.episodes):
-        env = DeadAirGRPOEnv(seed=42 + ep, difficulty=args.difficulty)
+        env = DispatchRGRPOEnv(seed=42 + ep, difficulty=args.difficulty)
         result = run_episode(
             env,
             model,
