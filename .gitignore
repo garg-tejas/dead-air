@@ -14,6 +14,8 @@ __pycache__/
 # outputs
 trained_models/
 outputs/
+*.gif
+*.mp4
 assets/*.gif
 assets/*.mp4
 assets/*.png
