@@ -79,6 +79,43 @@ def _run_checked(command: list[str], cwd: Path) -> None:
     subprocess.run(command, cwd=str(cwd), check=True)
 
 
+def _install_training_dependencies(checkout_dir: Path) -> None:
+    """Install DispatchR training dependencies into the active job environment."""
+    uv_executable = shutil.which("uv")
+    if uv_executable:
+        _run_checked(
+            [
+                uv_executable,
+                "pip",
+                "install",
+                "--python",
+                sys.executable,
+                "--no-cache",
+                "-e",
+                ".[train]",
+                "unsloth",
+                "huggingface_hub",
+            ],
+            cwd=checkout_dir,
+        )
+        return
+
+    _run_checked(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-cache-dir",
+            "-e",
+            ".[train]",
+            "unsloth",
+            "huggingface_hub",
+        ],
+        cwd=checkout_dir,
+    )
+
+
 def _get_flag_value(args: list[str], flag: str) -> str | None:
     """Return the value for a simple `--flag value` CLI argument."""
     for idx, token in enumerate(args[:-1]):
@@ -236,20 +273,7 @@ def main() -> int:
             exist_ok=True,
         )
 
-        _run_checked(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--no-cache-dir",
-                "-e",
-                ".[train]",
-                "unsloth",
-                "huggingface_hub",
-            ],
-            cwd=checkout_dir,
-        )
+        _install_training_dependencies(checkout_dir)
 
         train_command = [sys.executable, "train_unsloth_grpo.py", *train_args]
         print("$ " + " ".join(train_command))
