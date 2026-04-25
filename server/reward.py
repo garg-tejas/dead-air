@@ -6,7 +6,7 @@ from .constants import COVERAGE_THRESHOLD
 
 
 class RewardComputer:
-    """Compute episode reward from 3 components plus optional Mercor scaling."""
+    """Compute episode reward from 3 components plus perfect-run bonus."""
 
     def __init__(self, city_graph):
         self.city_graph = city_graph
@@ -22,7 +22,7 @@ class RewardComputer:
         """Compute full episode reward and metrics.
 
         Returns dict with:
-        - episode_reward: float (0-1, or up to 1.5 with Mercor)
+        - episode_reward: float (0-1)
         - response_score: float
         - fatality_penalty: float
         - coverage_score: float
@@ -76,16 +76,15 @@ class RewardComputer:
         )
         episode_reward = max(0.0, min(1.0, episode_reward))
 
-        # Mercor sub-theme: uncapped reward up to 1.5
-        mercor_bonus = 0.0
+        # Perfect-run bonus: reward excellence beyond the baseline
+        perfect_run_bonus = 0.0
         if fatalities == 0 and mean_response > 0.5:
-            mercor_bonus = 0.5
-
-        mercor_reward = episode_reward + mercor_bonus
+            perfect_run_bonus = 0.5
 
         return {
             "episode_reward": episode_reward,
-            "mercor_reward": mercor_reward,
+            "perfect_run_bonus": perfect_run_bonus,
+            "total_reward": episode_reward + perfect_run_bonus,
             "response_score": mean_response,
             "fatality_penalty": total_fatality_penalty,
             "coverage_score": coverage_score,

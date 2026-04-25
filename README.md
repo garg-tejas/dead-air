@@ -34,23 +34,31 @@ DispatchR simulates an 8-hour shift for an emergency dispatch commander in a 20-
 
 The environment is a **partially-observable Markov decision process (POMDP)** with hidden severity modifiers, noisy caller tones, and dynamic traffic conditions.
 
-## Problem Statements
+## Hackathon Theme Alignment
 
-### Primary: Theme #2 — Long-Horizon Planning
+DispatchR maps to **three themes simultaneously**, maximizing the innovation score:
 
-80-step episodes with sparse end-of-episode rewards. The agent must plan across the full shift, not just react to the current call.
+### Primary: Theme #2 — (Super) Long-Horizon Planning & Instruction Following
 
-### Secondary: Theme #3.1 — World Modeling
+80-step episodes with sparse end-of-episode rewards. The agent must plan across the full shift, not just react to the current call. Early dispatch mistakes compound — sending the wrong unit to a low-priority call means that unit is unavailable when a cardiac emergency arrives 20 steps later. The agent must decompose the shift into sub-goals (coverage maintenance, triage, event response) and recover from early errors.
 
-Partial observability: the agent sees delayed unit statuses, caller tone (not true severity), and reported hospital capacity (not true capacity). It must build a belief state from incomplete information.
+### Secondary: Theme #3.1 — World Modeling (Professional Tasks)
 
-### Theme #4: Self-Improvement — Adversarial City Designer
+Partial observability forces genuine world-model construction:
+- **Delayed radio updates**: Unit statuses lag 2-3 steps behind reality
+- **Hidden severity**: Caller tone (calm/agitated/screaming) is observable; true severity is not
+- **Ghost calls**: AI-generated false emergencies with noisy verification
+- **Dynamic traffic**: Bridge collapses reroute all units in real-time
+- **Noisy hospital capacity**: Reported status differs from true capacity
 
-A weakness tracker monitors where the agent fails (by zone, call type, and event response) and biases future scenarios toward those exact failure modes. The environment itself adapts to exploit the agent's blind spots.
+The agent cannot succeed by pattern-matching — it must maintain a persistent belief state about the true world.
 
-### Partner Sub-Theme: Mercor — Capped/Uncapped Rewards
+### Tertiary: Theme #4 — Self-Improvement (Adaptive Curriculum)
 
-Episode reward is capped at 1.0 for most cases, but can reach 1.5 with the Mercor bonus if the agent achieves zero fatalities AND mean response time exceeds 50% of oracle performance.
+Performance-gated curriculum learning auto-escalates difficulty:
+- **Warmup** (3 calls, 0% false alarms) → **Expert** (12 calls, 20% false alarms, 40% event rate)
+- Escalation triggered only when mean batch reward stabilizes above 0.65
+- The environment itself gets harder as the agent improves, preventing plateauing on easy scenarios
 
 ## Environment Features
 
@@ -105,7 +113,7 @@ dead-air/
 │   ├── event_scheduler.py       # City event templates + random triggers
 │   ├── adversarial_designer.py  # Weakness tracker + dynamic bias
 │   ├── curriculum.py            # Auto-escalate/de-escalate difficulty
-│   ├── reward.py                # 3-component reward + Mercor scaling
+│   ├── reward.py                # 3-component episode reward + action validity shaping
 │   └── constants.py             # Medical deadlines, city topology, unit configs
 │
 └── tests/
@@ -281,8 +289,6 @@ The episode reward has 4 components:
 reward = 0.50 * response_score + 0.30 * fatality_component + 0.20 * coverage_score
          + validity_bonus - invalidity_penalty - idle_penalty
 ```
-
-Plus Mercor bonus (+0.5) if fatalities == 0 and response_score > 0.5.
 
 ## How the Environment Prevents Reward Hacking
 
