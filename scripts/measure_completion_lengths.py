@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Measure actual completion lengths from the model to pick max_completion_length.
 
+Uses vLLM for fast inference when available (no training needed).
+Falls back to standard transformers if vLLM is not installed.
+
 Usage:
     python scripts/measure_completion_lengths.py --model unsloth/Qwen3-4B-Thinking-2507-bnb-4bit --episodes 10
-
-This runs inference with a very large max_new_tokens and records the actual
-length of every completion. The stats tell you what max_completion_length
-to use for training (recommendation: p95 + 20% headroom).
+    python scripts/measure_completion_lengths.py --model Qwen/Qwen3-4B --episodes 10 --use-vllm
 """
 
 import sys
@@ -17,24 +17,49 @@ import argparse
 import json
 import statistics
 import time
-
-import torch
-from transformers import AutoTokenizer
+from typing import List
 
 from server.grpo_env_wrapper import DispatchRGRPOEnv
+from server.prompt_utils import SYSTEM_PROMPT, build_chat_prompt, format_observation
 
-# Re-use inference helpers
-from inference import build_chat_prompt, format_observation, generate_action, SYSTEM_PROMPT
+
+def generate_vllm(llm, tokenizer, prompt: str, max_new_tokens: int) -> str:
+    """Generate one completion using vLLM."""
+    from vllm import SamplingParams
+    sampling_params = SamplingParams(
+        max_tokens=max_new_tokens,
+        temperature=0.7,
+        top_p=0.9,
+    )
+    outputs = llm.generate([prompt], sampling_params)
+    return outputs[0].outputs[0].text
+
+
+def generate_transformers(model, tokenizer, prompt: str, max_new_tokens: int, device: str):
+    """Generate one completion using standard transformers."""
+    import torch
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(device)
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            max_length=None,
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+    return tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
 
 
 def measure(
-    model,
+    generate_fn,
     tokenizer,
-    device: str,
     episodes: int = 10,
     difficulty: str = "learning",
-    max_new_tokens: int = 2048,  # generous so we don't truncate
-):
+    max_new_tokens: int = 2048,
+) -> tuple[List[int], List[float]]:
     lengths = []
     rewards = []
 
@@ -42,25 +67,20 @@ def measure(
         env = DispatchRGRPOEnv(seed=42 + ep, difficulty=difficulty)
         env.reset()
 
-        for step_idx in range(80):
+        for _ in range(80):
             if env._obs and env._obs.get("done"):
                 break
 
             obs_text = format_observation(env._obs)
             prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text)
 
-            # Tokenize prompt to count its length
-            prompt_ids = tokenizer(prompt, return_tensors="pt").input_ids
-            prompt_len = prompt_ids.shape[1]
-
-            # Generate with very large max_new_tokens
-            completion = generate_action(model, tokenizer, prompt, max_new_tokens, device)
+            completion = generate_fn(prompt, max_new_tokens)
 
             # Count completion tokens
             comp_ids = tokenizer(completion, return_tensors="pt", add_special_tokens=False).input_ids
             comp_len = comp_ids.shape[1]
-
             lengths.append(comp_len)
+
             env.step(completion)
 
         rewards.append(env.reward if env.reward is not None else 0.0)
@@ -68,10 +88,10 @@ def measure(
     return lengths, rewards
 
 
-def print_stats(lengths: list[int], rewards: list[float]):
+def print_stats(lengths: list[int], rewards: list[float]) -> int:
     if not lengths:
         print("No data collected.")
-        return
+        return 256
 
     lengths.sort()
     n = len(lengths)
@@ -95,11 +115,10 @@ def print_stats(lengths: list[int], rewards: list[float]):
     print("")
 
     p95 = percentile(95)
-    suggested = int(p95 * 1.2)  # 20% headroom above P95
+    suggested = int(p95 * 1.2)
     print(f"  SUGGESTED max_completion_length: {suggested}")
     print(f"    (P95 = {p95}, +20% headroom = {suggested})")
     print("")
-
     print("  Reward stats:")
     print(f"    Mean:      {statistics.mean(rewards):.3f}")
     print(f"    Min/Max:   {min(rewards):.3f} / {max(rewards):.3f}")
@@ -113,46 +132,53 @@ def main():
     parser.add_argument("--model", default="unsloth/Qwen3-4B-Thinking-2507-bnb-4bit")
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--difficulty", default="learning")
-    parser.add_argument("--use-unsloth", action="store_true", default=True)
-    parser.add_argument("--load-in-4bit", action="store_true", default=True)
+    parser.add_argument("--use-vllm", action="store_true", help="Use vLLM for faster inference")
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
 
-    print(f"Loading model: {args.model}")
-    if args.use_unsloth:
-        import unsloth
-        from unsloth import FastLanguageModel
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=args.model,
-            load_in_4bit=args.load_in_4bit,
-            max_seq_length=4096,
-            dtype=torch.bfloat16,
-        )
-        FastLanguageModel.for_inference(model)
-    else:
+    generate_fn = None
+    tokenizer = None
+
+    if args.use_vllm:
+        try:
+            from vllm import LLM
+            print(f"Loading model with vLLM: {args.model}")
+            llm = LLM(model=args.model, dtype="bfloat16", max_model_len=4096)
+            tokenizer = llm.get_tokenizer()
+            generate_fn = lambda prompt, max_tok: generate_vllm(llm, tokenizer, prompt, max_tok)
+            print("vLLM loaded successfully.")
+        except ImportError:
+            print("vLLM not installed. Falling back to standard transformers.")
+            args.use_vllm = False
+
+    if not args.use_vllm:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        print(f"Loading model with transformers: {args.model}")
         tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
-        from transformers import AutoModelForCausalLM
         model = AutoModelForCausalLM.from_pretrained(
             args.model,
             torch_dtype=torch.bfloat16,
-            device_map="auto",
+            device_map="auto" if args.device == "cuda" else None,
             trust_remote_code=True,
         )
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    model.eval()
-    device = next(model.parameters()).device
+        if args.device == "cpu":
+            model = model.to("cpu")
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        model.eval()
+        device = next(model.parameters()).device
+        generate_fn = lambda prompt, max_tok: generate_transformers(model, tokenizer, prompt, max_tok, device)
 
     print(f"Running {args.episodes} episodes with max_new_tokens=2048 (no truncation)...")
     start = time.time()
-    lengths, rewards = measure(model, tokenizer, device, args.episodes, args.difficulty)
+    lengths, rewards = measure(generate_fn, tokenizer, args.episodes, args.difficulty)
     elapsed = time.time() - start
 
     suggested = print_stats(lengths, rewards)
     print(f"\nTotal time: {elapsed:.1f}s ({elapsed/args.episodes:.1f}s per episode)")
 
-    # Save raw data for later analysis
     with open("completion_lengths.json", "w") as f:
         json.dump({
             "lengths": lengths,
@@ -160,6 +186,7 @@ def main():
             "suggested_max_completion_length": suggested,
             "model": args.model,
             "episodes": args.episodes,
+            "used_vllm": args.use_vllm,
         }, f, indent=2)
     print("Saved raw data to completion_lengths.json")
 
