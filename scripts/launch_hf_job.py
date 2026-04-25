@@ -53,6 +53,7 @@ def build_job_cmd(args) -> str:
         f"--model {args.model}",
         f"--episodes {args.episodes}",
         f"--batch-size {args.batch_size}",
+        f"--max-completion-length {args.max_completion_length}",
         "--output-dir /data/outputs",
         "--trajectory-file /data/outputs/trajectory.jsonl",
         "--push-to-hub",
@@ -71,6 +72,7 @@ def build_job_cmd(args) -> str:
             "python inference.py "
             f"--model-path {args.model} "
             "--use-unsloth --load-in-4bit "
+            f"--max-new-tokens {args.max_completion_length} "
             "--episodes 3 "
             "--difficulty learning "
             "--output /data/outputs/before_inference.json "
@@ -80,6 +82,7 @@ def build_job_cmd(args) -> str:
             "python inference.py "
             "--model-path /data/outputs/final "
             "--use-unsloth --load-in-4bit "
+            f"--max-new-tokens {args.max_completion_length} "
             "--episodes 3 "
             "--difficulty learning "
             "--output /data/outputs/after_inference.json "
@@ -132,7 +135,9 @@ def main():
     parser.add_argument("--flavor", default="l4x1",
                         help="GPU flavor (l4x1=$0.80/hr, a10g-large=$1.50/hr, a100-large=$2.50/hr)")
     parser.add_argument("--episodes", type=int, default=200)
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--max-completion-length", type=int, default=256,
+                        help="Max tokens per generation. 256 is fast, 512 is safe, 1536 is slow.")
     parser.add_argument("--timeout", default="8h", help="Job timeout (e.g. 8h, 4h, 30m)")
     parser.add_argument("--model", default="unsloth/Qwen3-4B-Thinking-2507-bnb-4bit")
     parser.add_argument("--hub-model-id", default="ggtejas/dispatchr-grpo",
@@ -184,6 +189,7 @@ def main():
     print(f"Flavor:       {args.flavor}")
     print(f"Episodes:     {args.episodes}")
     print(f"Batch:        {args.batch_size}")
+    print(f"Max tokens:   {args.max_completion_length}")
     print(f"Timeout:      {args.timeout}")
     print(f"Model:        {args.model}")
     print(f"Hub ID:       {args.hub_model_id}")
