@@ -20,6 +20,13 @@ A reinforcement learning environment for emergency medical dispatch, built for t
 
 **Status**: 47/47 tests passing. Training pipeline validated on L4. Ready for HF Hub Jobs.
 
+## Links
+
+- **Hugging Face Space**: [ggtejas/dispatcher](https://huggingface.co/spaces/ggtejas/dispatcher)
+- **Web Demo**: [dispatch-r.vercel.app](https://dispatch-r.vercel.app/)
+- **Project Writeup**: [blog.md](blog.md)
+- **Training Curves**: [Reward Curve](images/reward-curve.png) and [Loss Curve](images/loss-curve.png)
+
 ## What It Is
 
 DispatchR simulates an 8-hour shift for an emergency dispatch commander in a 20-node city. The agent must:
