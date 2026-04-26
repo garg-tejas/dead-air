@@ -289,9 +289,10 @@ class DispatcherEnvironment(Environment):
             if total_actions > 0:
                 validity_bonus = (self._valid_action_count / total_actions) * 0.05
                 invalidity_penalty = (self._invalid_action_count / total_actions) * 0.05
-                idle_penalty = (self._hold_count / total_actions) * 0.02
+                idle_penalty = (self._hold_count / total_actions) * 0.10
                 reward = reward + validity_bonus - invalidity_penalty - idle_penalty
-                reward = max(0.0, reward)  # Floor at 0; total_reward from RewardComputer may already exceed 1.0
+                # Do NOT floor at 0 — negative rewards are essential learning signal
+                # for the agent to understand that inaction has consequences.
 
             # Attach step-level metrics to result for inspection
             result["validity_bonus"] = validity_bonus if total_actions > 0 else 0.0

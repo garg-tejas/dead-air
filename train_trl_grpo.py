@@ -307,9 +307,12 @@ def make_reward_fn(
                 obs_text = format_observation(env._obs)
 
                 if model is not None:
-                    # Epsilon-greedy: 50% chance to dispatch first idle unit
-                    # This prevents cold-start deadlock where all completions are hold
-                    if np.random.random() < 0.50:
+                    # Exploration: first 10 steps ALWAYS try to dispatch if possible.
+                    # After that, 50% random. This guarantees non-zero rewards even if
+                    # the policy model is stuck in hold-loop.
+                    if step_idx <= 10:
+                        completion = _explore_action(env)
+                    elif np.random.random() < 0.50:
                         completion = _explore_action(env)
                     else:
                         completion = _generate_action(
@@ -787,7 +790,9 @@ def main():
 
     # ── Train ─────────────────────────────────────────────────────────
     print("=" * 60)
-    print("Starting training")
+    print("DispatchR TRL GRPO Trainer")
+    print("  Version: 2026-04-26-reward-fix")
+    print("  Features: negative-rewards | eps-greedy-50% | no-hold-clamp")
     print("=" * 60)
     trainer.train()
 

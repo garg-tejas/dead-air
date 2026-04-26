@@ -72,13 +72,15 @@ class RewardComputer:
         if coverage_score is None:
             coverage_score = self._compute_coverage(units)
 
-        # Base episode reward
+        # Base episode reward (can go negative to punish catastrophic failure)
         episode_reward = (
             0.50 * mean_response
             + 0.30 * fatality_component
             + 0.20 * coverage_score
         )
-        episode_reward = max(0.0, min(1.0, episode_reward))
+        # Clamp only the upper bound; let negative rewards through so the
+        # agent learns that inaction has consequences.
+        episode_reward = min(2.0, episode_reward)
 
         # Perfect-run bonus: reward excellence beyond the baseline
         perfect_run_bonus = 0.0
