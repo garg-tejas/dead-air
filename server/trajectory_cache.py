@@ -43,7 +43,8 @@ def _run_single_episode(args: Tuple[int, str]) -> Dict[str, Any]:
         if obs is None or obs.get("done"):
             break
         action = greedy_action(obs)
-        env.step(action)
+        action_text = json.dumps(action)
+        env.step(action_text)
         steps.append({"step": step_idx, "action": action})
 
     reward = env.reward if env.reward is not None else 0.0
@@ -196,9 +197,9 @@ def sample_dataset_rows(
                     }
                 )
 
-            # Apply cached action to advance env
-            action = cached_steps[step_idx]["action"]
-            env.step(action)
+            # Apply cached action to advance env (convert dict to JSON string)
+            action_dict = cached_steps[step_idx]["action"]
+            env.step(json.dumps(action_dict))
 
     return rows
 
@@ -209,8 +210,8 @@ def replay_steps(env_ref, cached_steps: List[Dict[str, Any]], up_to_step: int) -
     Used in reward_fn to quickly reconstruct the state at step ``up_to_step``.
     """
     for step_idx in range(min(up_to_step, len(cached_steps))):
-        action = cached_steps[step_idx]["action"]
-        env_ref.step(action)
+        action_dict = cached_steps[step_idx]["action"]
+        env_ref.step(json.dumps(action_dict))
 
 
 def get_cache_path(cache_dir: str, difficulty: str, n_seeds: int) -> str:
