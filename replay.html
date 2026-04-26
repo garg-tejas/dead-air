@@ -1,0 +1,943 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>DispatchR Replay</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Chivo:wght@400;500;700;800&family=JetBrains+Mono:wght@500;700&display=swap");
+
+      :root {
+        --bg: #070c18;
+        --panel: #0f172a;
+        --panel-2: #111b34;
+        --text: #e2e8f0;
+        --muted: #8ea1bc;
+        --line: #243552;
+        --accent: #38bdf8;
+        --ok: #22c55e;
+        --warn: #f59e0b;
+        --bad: #ef4444;
+        --radius: 14px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(
+            circle at 15% 12%,
+            rgba(56, 189, 248, 0.14),
+            transparent 40%
+          ),
+          radial-gradient(
+            circle at 88% 78%,
+            rgba(217, 119, 6, 0.12),
+            transparent 45%
+          ),
+          linear-gradient(160deg, #050814 0%, #081026 55%, #0b1328 100%);
+        color: var(--text);
+        font-family: "Chivo", "Segoe UI", sans-serif;
+        letter-spacing: 0.01em;
+      }
+      .app {
+        width: min(1440px, 100% - 28px);
+        margin: 14px auto;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: 10px;
+      }
+      .hud {
+        display: grid;
+        grid-template-columns: 1.2fr repeat(4, 1fr) auto;
+        gap: 10px;
+        background: rgba(10, 20, 41, 0.82);
+        border: 1px solid rgba(53, 83, 132, 0.5);
+        border-radius: var(--radius);
+        padding: 10px;
+        backdrop-filter: blur(7px);
+        box-shadow: 0 12px 28px rgba(3, 7, 18, 0.45);
+      }
+      .hudCard {
+        background: linear-gradient(
+          180deg,
+          rgba(18, 31, 60, 0.95),
+          rgba(12, 23, 46, 0.95)
+        );
+        border: 1px solid rgba(60, 88, 137, 0.55);
+        border-radius: 10px;
+        padding: 8px 12px;
+        min-height: 56px;
+        display: grid;
+        align-content: center;
+        gap: 2px;
+      }
+      .hudLabel {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+      }
+      .hudValue {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 19px;
+        font-weight: 700;
+        color: #f8fafc;
+      }
+      .hudBrand .hudValue {
+        font-family: "Chivo", sans-serif;
+        font-size: 23px;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        color: #7dd3fc;
+        text-shadow: 0 0 16px rgba(56, 189, 248, 0.3);
+      }
+      .loadBtn {
+        border: 1px solid rgba(66, 103, 164, 0.8);
+        border-radius: 10px;
+        background: linear-gradient(180deg, #19386a, #122848);
+        color: #d6ecff;
+        font-family: "JetBrains Mono", monospace;
+        font-weight: 700;
+        cursor: pointer;
+        min-width: 148px;
+        transition:
+          transform 120ms ease,
+          box-shadow 120ms ease;
+        padding: 0 14px;
+      }
+      .loadBtn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 14px rgba(14, 27, 50, 0.4);
+      }
+      .main {
+        display: grid;
+        grid-template-columns: minmax(760px, 1fr) 320px;
+        gap: 10px;
+        min-height: 680px;
+      }
+      .stage {
+        position: relative;
+        background: linear-gradient(
+          180deg,
+          rgba(12, 21, 43, 0.92),
+          rgba(11, 18, 35, 0.92)
+        );
+        border: 1px solid rgba(53, 83, 132, 0.45);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+        background: linear-gradient(180deg, #0a1224, #081024 60%, #050a16);
+      }
+      .dropOverlay {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        pointer-events: none;
+        background: rgba(3, 8, 20, 0.62);
+        transition: opacity 180ms ease;
+      }
+      .dropOverlay.hidden {
+        opacity: 0;
+      }
+      .dropText {
+        border: 1px dashed rgba(107, 142, 200, 0.65);
+        border-radius: 12px;
+        padding: 18px 24px;
+        background: rgba(12, 21, 42, 0.78);
+        text-align: center;
+        color: #d5e7ff;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 14px;
+        line-height: 1.5;
+        box-shadow: 0 12px 30px rgba(2, 8, 20, 0.45);
+      }
+      .eventBanner {
+        position: absolute;
+        left: 50%;
+        top: 14px;
+        transform: translate(-50%, -130%);
+        opacity: 0;
+        transition:
+          transform 220ms ease,
+          opacity 220ms ease;
+        background: linear-gradient(
+          120deg,
+          rgba(146, 64, 14, 0.95),
+          rgba(153, 27, 27, 0.94)
+        );
+        color: #fff7ed;
+        border: 1px solid rgba(251, 191, 36, 0.45);
+        border-radius: 10px;
+        padding: 10px 16px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 13px;
+        box-shadow: 0 10px 26px rgba(35, 10, 7, 0.45);
+        pointer-events: none;
+        max-width: calc(100% - 24px);
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+      }
+      .eventBanner.visible {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+      .side {
+        display: grid;
+        grid-template-rows: 1fr 1fr;
+        gap: 10px;
+      }
+      .panel {
+        background: linear-gradient(
+          180deg,
+          rgba(16, 29, 55, 0.96),
+          rgba(10, 19, 37, 0.96)
+        );
+        border: 1px solid rgba(53, 83, 132, 0.5);
+        border-radius: var(--radius);
+        padding: 12px;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: 0;
+      }
+      .panelTitle {
+        margin: 0;
+        color: #93c5fd;
+        font-size: 12px;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+        font-family: "JetBrains Mono", monospace;
+        padding-bottom: 8px;
+        border-bottom: 1px solid rgba(57, 83, 130, 0.5);
+      }
+      .panelBody {
+        overflow: auto;
+        margin-top: 8px;
+        padding-right: 2px;
+        display: grid;
+        gap: 6px;
+        align-content: start;
+        font-size: 13px;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid rgba(46, 69, 109, 0.45);
+        border-radius: 9px;
+        background: rgba(13, 24, 47, 0.68);
+        padding: 7px 8px;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }
+      .rowMain {
+        color: #dce7f7;
+        font-size: 12px;
+      }
+      .rowSub {
+        color: #98a7bf;
+        font-size: 11px;
+      }
+      .badge {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        border: 1px solid rgba(106, 134, 184, 0.56);
+        border-radius: 99px;
+        padding: 2px 6px;
+        color: #e4f2ff;
+        background: rgba(15, 33, 65, 0.6);
+      }
+      .controls {
+        background: rgba(10, 20, 41, 0.83);
+        border: 1px solid rgba(53, 83, 132, 0.5);
+        border-radius: var(--radius);
+        padding: 10px;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 12px;
+      }
+      .btnRow,
+      .speedRow {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      button.ctrl {
+        min-width: 38px;
+        height: 34px;
+        border-radius: 9px;
+        border: 1px solid rgba(65, 100, 158, 0.7);
+        background: linear-gradient(180deg, #16305a, #12294b);
+        color: #e3f2ff;
+        font-weight: 700;
+        font-family: "JetBrains Mono", monospace;
+        cursor: pointer;
+      }
+      button.ctrl:hover {
+        filter: brightness(1.08);
+      }
+      button.ctrl.active {
+        border-color: rgba(125, 211, 252, 0.9);
+        box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.4) inset;
+        color: #d4f6ff;
+        background: linear-gradient(180deg, #17527d, #123f62);
+      }
+      .timeline {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 10px;
+        align-items: center;
+        font-family: "JetBrains Mono", monospace;
+        color: #bfd0e8;
+        font-size: 12px;
+      }
+      input[type="range"] {
+        width: 100%;
+        accent-color: #38bdf8;
+        cursor: pointer;
+      }
+      @media (max-width: 1200px) {
+        .main {
+          grid-template-columns: 1fr;
+          grid-template-rows: 65vh auto;
+        }
+        .side {
+          grid-template-columns: 1fr 1fr;
+          grid-template-rows: 1fr;
+        }
+        .hud {
+          grid-template-columns: repeat(3, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <section class="hud">
+        <div class="hudCard hudBrand">
+          <div class="hudLabel">System</div>
+          <div class="hudValue">DispatchR Replay</div>
+        </div>
+        <div class="hudCard">
+          <div class="hudLabel">Step</div>
+          <div id="hudStep" class="hudValue">-- / --</div>
+        </div>
+        <div class="hudCard">
+          <div class="hudLabel">Reward</div>
+          <div id="hudReward" class="hudValue">--</div>
+        </div>
+        <div class="hudCard">
+          <div class="hudLabel">Difficulty</div>
+          <div id="hudDifficulty" class="hudValue">standard</div>
+        </div>
+        <div class="hudCard">
+          <div class="hudLabel">Playback</div>
+          <div id="hudPlayback" class="hudValue">Paused</div>
+        </div>
+        <button id="loadBtn" class="loadBtn">Load episode.json</button>
+        <input id="fileInput" type="file" accept="application/json" hidden />
+      </section>
+      <section class="main">
+        <div id="stage" class="stage">
+          <canvas id="cityCanvas"></canvas>
+          <div id="eventBanner" class="eventBanner"></div>
+          <div id="dropOverlay" class="dropOverlay">
+            <div class="dropText">
+              Drop <strong>episode.json</strong> here<br />or click
+              <strong>Load episode.json</strong>
+            </div>
+          </div>
+        </div>
+        <aside class="side">
+          <section class="panel">
+            <h3 class="panelTitle">Active Calls</h3>
+            <div id="callsPanel" class="panelBody"></div>
+          </section>
+          <section class="panel">
+            <h3 class="panelTitle">Unit Status</h3>
+            <div id="unitsPanel" class="panelBody"></div>
+          </section>
+        </aside>
+      </section>
+      <section class="controls">
+        <div class="btnRow">
+          <button class="ctrl" id="backBtn" title="Step back">⏪</button>
+          <button class="ctrl" id="playBtn" title="Play/Pause">▶</button>
+          <button class="ctrl" id="fwdBtn" title="Step forward">⏩</button>
+        </div>
+        <div class="timeline">
+          <span id="timelineNow">0.0</span>
+          <input
+            id="timeline"
+            type="range"
+            min="0"
+            max="0"
+            value="0"
+            step="0.001"
+          />
+          <span id="timelineMax">0</span>
+        </div>
+        <div class="speedRow">
+          <button class="ctrl speed active" data-speed="0.5">0.5x</button>
+          <button class="ctrl speed" data-speed="1">1x</button>
+          <button class="ctrl speed" data-speed="2">2x</button>
+          <button class="ctrl speed" data-speed="4">4x</button>
+        </div>
+      </section>
+    </div>
+    <script>
+      const COLORS = {
+        bgEdge: "#334155",
+        brokenEdge: "#ef4444",
+        downtown: "#2563EB",
+        highway: "#F59E0B",
+        hills: "#10B981",
+        industrial: "#64748B",
+        suburbs: "#8B5CF6",
+        cardiac: "#DC2626",
+        trauma: "#EA580C",
+        fire: "#D97706",
+        false_alarm: "#6B7280",
+        ghost: "#9333EA",
+        idle: "#06B6D4",
+        en_route: "#FFFFFF",
+        on_scene: "#22C55E",
+        returning: "#0891B2",
+        out_of_service: "#EF4444",
+        hospital: "#EC4899",
+        divert: "#ef4444",
+      };
+      const NODE_ZONES = {
+        0: "downtown",
+        1: "downtown",
+        2: "downtown",
+        3: "downtown",
+        4: "highway",
+        5: "highway",
+        6: "highway",
+        7: "highway",
+        8: "hills",
+        9: "hills",
+        10: "hills",
+        11: "hills",
+        12: "industrial",
+        13: "industrial",
+        14: "industrial",
+        15: "industrial",
+        16: "suburbs",
+        17: "suburbs",
+        18: "suburbs",
+        19: "suburbs",
+      };
+      const NODE_POSITIONS = {
+        0: [2, 18],
+        1: [5, 19],
+        2: [5, 16],
+        3: [2, 15],
+        4: [18, 18],
+        5: [21, 19],
+        6: [21, 16],
+        7: [18, 15],
+        8: [2, 10],
+        9: [5, 11],
+        10: [5, 8],
+        11: [2, 7],
+        12: [18, 10],
+        13: [21, 11],
+        14: [21, 8],
+        15: [18, 7],
+        16: [10, 2],
+        17: [13, 3],
+        18: [13, 0],
+        19: [10, -1],
+      };
+      const HOSPITALS = { 0: 1, 1: 14, 2: 17 };
+      const CANONICAL_CITY_EDGES = [
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        [0, 3],
+        [0, 2],
+        [4, 5],
+        [5, 6],
+        [6, 7],
+        [4, 7],
+        [5, 7],
+        [8, 9],
+        [9, 10],
+        [10, 11],
+        [8, 11],
+        [9, 11],
+        [12, 13],
+        [13, 14],
+        [14, 15],
+        [12, 15],
+        [13, 15],
+        [16, 17],
+        [17, 18],
+        [18, 19],
+        [16, 19],
+        [17, 19],
+        [3, 4],
+        [3, 8],
+        [7, 12],
+        [7, 16],
+        [11, 16],
+        [11, 12],
+        [15, 19],
+        [0, 16],
+        [5, 10],
+        [2, 13],
+      ];
+      const ZONE_CENTERS = {
+        downtown: [3.5, 19],
+        highway: [19.5, 19],
+        hills: [3.5, 10],
+        industrial: [19.5, 10],
+        suburbs: [11.5, 2.5],
+      };
+      const state = {
+        episode: [],
+        loaded: false,
+        playing: false,
+        speed: 0.5,
+        stepDurationSec: 1.5,
+        timeSteps: 0,
+        lastTs: 0,
+        trails: new Map(),
+        rewardPrev: null,
+        lastStepShown: -1,
+        bannerUntilMs: 0,
+        bannerText: "",
+      };
+      const canvas = document.getElementById("cityCanvas"),
+        ctx = canvas.getContext("2d"),
+        stage = document.getElementById("stage"),
+        callsPanel = document.getElementById("callsPanel"),
+        unitsPanel = document.getElementById("unitsPanel"),
+        dropOverlay = document.getElementById("dropOverlay"),
+        eventBanner = document.getElementById("eventBanner"),
+        hudStep = document.getElementById("hudStep"),
+        hudReward = document.getElementById("hudReward"),
+        hudDifficulty = document.getElementById("hudDifficulty"),
+        hudPlayback = document.getElementById("hudPlayback"),
+        playBtn = document.getElementById("playBtn"),
+        backBtn = document.getElementById("backBtn"),
+        fwdBtn = document.getElementById("fwdBtn"),
+        timeline = document.getElementById("timeline"),
+        timelineNow = document.getElementById("timelineNow"),
+        timelineMax = document.getElementById("timelineMax");
+      function resizeCanvas() {
+        const r = stage.getBoundingClientRect();
+        const d = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(r.width * d);
+        canvas.height = Math.floor(r.height * d);
+        ctx.setTransform(d, 0, 0, d, 0, 0);
+      }
+      window.addEventListener("resize", resizeCanvas);
+      resizeCanvas();
+      const maxStepIndex = () => Math.max(0, state.episode.length - 1),
+        clampTime = (v) => Math.max(0, Math.min(v, maxStepIndex())),
+        currentStepIndex = () => Math.floor(clampTime(state.timeSteps)),
+        nextStepIndex = () => Math.min(currentStepIndex() + 1, maxStepIndex()),
+        subT = () => clampTime(state.timeSteps) - currentStepIndex();
+      function worldToCanvas(nodeId) {
+        const [x, y] = NODE_POSITIONS[nodeId];
+        const r = stage.getBoundingClientRect();
+        const pad = 60,
+          wx0 = -2,
+          wx1 = 26,
+          wy0 = -4,
+          wy1 = 24;
+        const px = pad + ((x - wx0) / (wx1 - wx0)) * (r.width - pad * 2);
+        const py = pad + ((wy1 - y) / (wy1 - wy0)) * (r.height - pad * 2);
+        return [px, py];
+      }
+      const lerp = (a, b, t) => a + (b - a) * t;
+      function unitPosition(unit, t) {
+        const chain = [unit.location, ...(unit.path_remaining || [])];
+        if (unit.status !== "en_route" || chain.length < 2)
+          return worldToCanvas(unit.location);
+        const segs = chain.length - 1,
+          prog = t * segs,
+          seg = Math.min(Math.floor(prog), segs - 1),
+          st = prog - seg,
+          p0 = worldToCanvas(chain[seg]),
+          p1 = worldToCanvas(chain[seg + 1]);
+        return [lerp(p0[0], p1[0], st), lerp(p0[1], p1[1], st)];
+      }
+      const callColor = (c) =>
+          c.is_ghost ? COLORS.ghost : COLORS[c.reported_type] || COLORS.trauma,
+        unitColor = (u) => COLORS[u.status] || "#fff";
+      const isBrokenEdge = (u, v, alerts) =>
+        !!alerts?.some(
+          (a) => String(a).includes(String(u)) && String(a).includes(String(v)),
+        );
+      function drawBackground() {
+        const r = stage.getBoundingClientRect();
+        const g = ctx.createLinearGradient(0, 0, 0, r.height);
+        g.addColorStop(0, "#091329");
+        g.addColorStop(1, "#060c1b");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, r.width, r.height);
+        ctx.globalAlpha = 0.1;
+        ctx.strokeStyle = "#223250";
+        for (let i = 0; i < 30; i++) {
+          const y = i * (r.height / 30);
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(r.width, y);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+      function drawEdges(frame, phaseSec) {
+        const dash = (phaseSec * 90) % 20;
+        for (const [u, v] of CANONICAL_CITY_EDGES) {
+          const [x0, y0] = worldToCanvas(u),
+            [x1, y1] = worldToCanvas(v),
+            broken = isBrokenEdge(u, v, frame.traffic_alerts || []);
+          ctx.save();
+          ctx.lineWidth = broken ? 4 : 2;
+          ctx.strokeStyle = broken ? COLORS.brokenEdge : COLORS.bgEdge;
+          ctx.globalAlpha = broken ? 0.95 : 0.7;
+          if (broken) {
+            ctx.setLineDash([8, 6]);
+            ctx.lineDashOffset = -dash;
+          }
+          ctx.beginPath();
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+      function drawNodes() {
+        for (let n = 0; n < 20; n++) {
+          const c = COLORS[NODE_ZONES[n]],
+            [x, y] = worldToCanvas(n);
+          ctx.fillStyle = c;
+          ctx.globalAlpha = 0.24;
+          ctx.beginPath();
+          ctx.arc(x, y, 16, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 0.9;
+          ctx.beginPath();
+          ctx.arc(x, y, 10, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#f8fafc";
+          ctx.font = "700 11px JetBrains Mono";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(String(n), x, y);
+          ctx.globalAlpha = 1;
+        }
+        ctx.globalAlpha = 0.35;
+        ctx.font = "600 12px Chivo";
+        ctx.textAlign = "center";
+        for (const [zone, [zx, zy]] of Object.entries(ZONE_CENTERS)) {
+          const [x] = worldToCanvas(Math.round(zx));
+          const yy = worldToCanvas(Math.round(zy))[1];
+          ctx.fillStyle = COLORS[zone];
+          ctx.fillText(zone.toUpperCase(), x, yy);
+        }
+        ctx.globalAlpha = 1;
+      }
+      function drawHospitals(frame) {
+        const m = new Map(
+          (frame.hospital_statuses || []).map((h) => [
+            h.location,
+            h.reported_status,
+          ]),
+        );
+        for (const node of Object.values(HOSPITALS)) {
+          const [x, y] = worldToCanvas(node),
+            d = m.get(node) === "on_divert";
+          ctx.fillStyle = d ? COLORS.divert : COLORS.hospital;
+          ctx.font = "700 22px JetBrains Mono";
+          ctx.textAlign = "center";
+          ctx.fillText("+", x, y - 18);
+        }
+      }
+      function drawCalls(frame, phaseSec) {
+        const calls = (frame.calls || []).filter((c) => !c.resolved);
+        for (const call of calls) {
+          const [x, y] = worldToCanvas(call.location),
+            color = callColor(call),
+            freq = Math.max(0.8, Math.min(3.2, call.panic_modifier || 1));
+          for (let ring = 0; ring < 3; ring++) {
+            const phase = (phaseSec * freq + ring * 0.33) % 1,
+              r = 14 + phase * 30,
+              alpha = 0.68 * (1 - phase);
+            ctx.strokeStyle = color;
+            ctx.globalAlpha = alpha;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.globalAlpha = 1;
+          if (call.is_ghost) {
+            ctx.fillStyle = COLORS.ghost;
+            ctx.font = "700 10px JetBrains Mono";
+            ctx.textAlign = "center";
+            ctx.fillText("VERIFY", x, y + 26);
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+      function updateTrail(unitId, pos) {
+        if (!state.trails.has(unitId)) state.trails.set(unitId, []);
+        const t = state.trails.get(unitId);
+        t.unshift(pos);
+        if (t.length > 8) t.length = 8;
+      }
+      function drawUnits(frame, t) {
+        for (const unit of frame.units || []) {
+          const pos = unitPosition(unit, t);
+          updateTrail(unit.unit_id, pos);
+          const trail = state.trails.get(unit.unit_id) || [],
+            color = unitColor(unit);
+          trail.forEach((p, idx) => {
+            const a = 0.22 * (1 - idx / trail.length);
+            ctx.globalAlpha = a;
+            ctx.fillStyle = color;
+            ctx.fillRect(p[0] - 3, p[1] - 3, 6, 6);
+          });
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = color;
+          ctx.strokeStyle = "#f8fafc";
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.roundRect(pos[0] - 9, pos[1] - 9, 18, 18, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#020617";
+          ctx.font = "700 10px JetBrains Mono";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(String(unit.unit_id), pos[0], pos[1]);
+        }
+        ctx.globalAlpha = 1;
+      }
+      function drawBootScreen(sec) {
+        drawBackground();
+        drawEdges({ traffic_alerts: [] }, sec);
+        drawNodes();
+        drawCalls(
+          {
+            calls: [
+              { location: 3, panic_modifier: 1.2, reported_type: "cardiac" },
+              { location: 15, panic_modifier: 0.9, reported_type: "trauma" },
+            ],
+          },
+          sec,
+        );
+      }
+      function setBanner(text) {
+        state.bannerText = text;
+        state.bannerUntilMs = performance.now() + 2000;
+        eventBanner.textContent = text;
+        eventBanner.classList.add("visible");
+      }
+      function updatePanels(frame) {
+        const active = (frame.calls || []).filter((c) => !c.resolved);
+        callsPanel.innerHTML = "";
+        unitsPanel.innerHTML = "";
+        if (!active.length) {
+          callsPanel.innerHTML = `<div class="row"><span class="dot" style="background:#64748b"></span><div class="rowMain">No active calls</div><span class="badge">CLEAR</span></div>`;
+        } else {
+          for (const c of active) {
+            const dot = c.is_ghost ? COLORS.ghost : callColor(c),
+              typeTxt = c.is_ghost ? "ghost" : c.reported_type,
+              badge = c.is_ghost ? "VERIFY" : `N${c.location}`;
+            const row = document.createElement("div");
+            row.className = "row";
+            row.innerHTML = `<span class="dot" style="background:${dot}"></span><div><div class="rowMain">Call ${c.call_id} • ${typeTxt}</div><div class="rowSub">${c.time_elapsed ?? 0} min elapsed</div></div><span class="badge">${badge}</span>`;
+            callsPanel.appendChild(row);
+          }
+        }
+        for (const u of frame.units || []) {
+          const row = document.createElement("div");
+          const uc = unitColor(u),
+            call = u.current_call == null ? "-" : `#${u.current_call}`;
+          row.className = "row";
+          row.innerHTML = `<span class="dot" style="background:${uc}"></span><div><div class="rowMain">Unit ${u.unit_id} • ${u.status}</div><div class="rowSub">@ Node ${u.location}</div></div><span class="badge">${call}</span>`;
+          unitsPanel.appendChild(row);
+        }
+      }
+      function updateHUD(frame, idx) {
+        hudStep.textContent = `${idx} / ${frame.max_steps ?? maxStepIndex()}`;
+        const r = Number(frame.reward ?? 0);
+        hudReward.textContent = r.toFixed(3);
+        if (state.rewardPrev != null) {
+          if (r > state.rewardPrev) hudReward.style.color = "#22c55e";
+          else if (r < state.rewardPrev) hudReward.style.color = "#ef4444";
+          else hudReward.style.color = "#f8fafc";
+        }
+        state.rewardPrev = r;
+        hudPlayback.textContent = state.playing ? `${state.speed}x` : "Paused";
+        hudDifficulty.textContent = "standard";
+        timeline.max = String(maxStepIndex());
+        timeline.value = String(clampTime(state.timeSteps));
+        timelineNow.textContent = clampTime(state.timeSteps).toFixed(1);
+        timelineMax.textContent = String(maxStepIndex());
+      }
+      function render(nowMs) {
+        const nowSec = nowMs / 1000;
+        if (!state.lastTs) state.lastTs = nowSec;
+        const dt = nowSec - state.lastTs;
+        state.lastTs = nowSec;
+        if (!state.loaded) {
+          drawBootScreen(nowSec);
+          requestAnimationFrame(render);
+          return;
+        }
+        if (state.playing) {
+          state.timeSteps = clampTime(
+            state.timeSteps + (dt * state.speed) / state.stepDurationSec,
+          );
+          if (state.timeSteps >= maxStepIndex()) {
+            state.timeSteps = maxStepIndex();
+            state.playing = false;
+            playBtn.textContent = "▶";
+          }
+        }
+        const i0 = currentStepIndex(),
+          t = subT(),
+          frame = state.episode[i0];
+        drawBackground();
+        drawEdges(frame, nowSec);
+        drawNodes();
+        drawHospitals(frame);
+        drawCalls(frame, nowSec);
+        drawUnits(frame, t);
+        if (i0 !== state.lastStepShown) {
+          const events = frame.recent_events || [];
+          if (events.length) setBanner(events[events.length - 1]);
+          state.lastStepShown = i0;
+          updatePanels(frame);
+        }
+        updateHUD(frame, i0);
+        if (state.bannerText && performance.now() > state.bannerUntilMs)
+          eventBanner.classList.remove("visible");
+        requestAnimationFrame(render);
+      }
+      function loadEpisodeData(data) {
+        if (!Array.isArray(data) || !data.length)
+          throw new Error("episode.json must be a non-empty array");
+        state.episode = data;
+        state.loaded = true;
+        state.playing = false;
+        state.timeSteps = 0;
+        state.trails.clear();
+        state.rewardPrev = null;
+        state.lastStepShown = -1;
+        dropOverlay.classList.add("hidden");
+        playBtn.textContent = "▶";
+        updatePanels(data[0]);
+        updateHUD(data[0], 0);
+      }
+      async function loadFile(file) {
+        const text = await file.text();
+        loadEpisodeData(JSON.parse(text));
+      }
+      document
+        .getElementById("loadBtn")
+        .addEventListener("click", () =>
+          document.getElementById("fileInput").click(),
+        );
+      document
+        .getElementById("fileInput")
+        .addEventListener("change", async (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          try {
+            await loadFile(file);
+          } catch (err) {
+            alert(err.message);
+          }
+          e.target.value = "";
+        });
+      stage.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dropOverlay.classList.remove("hidden");
+      });
+      stage.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer?.files?.[0];
+        if (!file) return;
+        try {
+          await loadFile(file);
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+      playBtn.addEventListener("click", () => {
+        if (!state.loaded) return;
+        state.playing = !state.playing;
+        playBtn.textContent = state.playing ? "⏸" : "▶";
+      });
+      backBtn.addEventListener("click", () => {
+        if (!state.loaded) return;
+        state.playing = false;
+        playBtn.textContent = "▶";
+        state.timeSteps = clampTime(Math.floor(state.timeSteps) - 1);
+      });
+      fwdBtn.addEventListener("click", () => {
+        if (!state.loaded) return;
+        state.playing = false;
+        playBtn.textContent = "▶";
+        state.timeSteps = clampTime(Math.floor(state.timeSteps) + 1);
+      });
+      timeline.addEventListener("input", () => {
+        if (!state.loaded) return;
+        state.playing = false;
+        playBtn.textContent = "▶";
+        state.timeSteps = clampTime(Number(timeline.value));
+      });
+      document.querySelectorAll(".speed").forEach((b) =>
+        b.addEventListener("click", () => {
+          document
+            .querySelectorAll(".speed")
+            .forEach((x) => x.classList.remove("active"));
+          b.classList.add("active");
+          state.speed = Number(b.dataset.speed || "1");
+        }),
+      );
+      window.addEventListener("keydown", (e) => {
+        if (e.code === "Space") {
+          e.preventDefault();
+          playBtn.click();
+        } else if (e.code === "ArrowRight") {
+          e.preventDefault();
+          fwdBtn.click();
+        } else if (e.code === "ArrowLeft") {
+          e.preventDefault();
+          backBtn.click();
+        }
+      });
+      fetch("./episode.json")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data) loadEpisodeData(data);
+        })
+        .catch(() => {});
+      requestAnimationFrame(render);
+    </script>
+  </body>
+</html>

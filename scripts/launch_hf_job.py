@@ -38,7 +38,7 @@ import sys
 FLAVORS = {
     "l4x1":       {"vram_gb": 24,  "price": "$0.80/hr",  "recommended_script": "unsloth"},
     "a10g-large": {"vram_gb": 24,  "price": "$1.50/hr",  "recommended_script": "unsloth"},
-    "l40s":       {"vram_gb": 48,  "price": "$1.80/hr",  "recommended_script": "trl"},
+    "l40sx1":       {"vram_gb": 48,  "price": "$1.80/hr",  "recommended_script": "trl"},
     "a100-large": {"vram_gb": 80,  "price": "$2.50/hr",  "recommended_script": "trl"},
 }
 

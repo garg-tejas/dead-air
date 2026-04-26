@@ -61,6 +61,59 @@ class DispatchRGRPOEnv:
             self._episode_reward = self._obs["reward"]
         return "\n".join(events) if events else "Action executed."
 
+    def _format_step_log(self, action: Dict[str, Any]) -> str:
+        """Return a concise one-line summary of the current step for tracing."""
+        env = self._env
+        step = env.step_count
+
+        # Action description
+        atype = action.get("action_type", "?")
+        if atype == "dispatch":
+            act_str = f"dispatch:unit{action.get('unit_id','?')}:call{action.get('call_id','?')}"
+        elif atype == "reroute":
+            act_str = f"reroute:unit{action.get('unit_id','?')}:call{action.get('call_id','?')}"
+        elif atype == "stage":
+            act_str = f"stage:unit{action.get('unit_id','?')}:node{action.get('location_node','?')}"
+        elif atype == "divert":
+            act_str = f"divert:unit{action.get('unit_id','?')}:hosp{action.get('hospital_id','?')}"
+        elif atype == "verify":
+            act_str = f"verify:call{action.get('call_id','?')}"
+        elif atype == "request_mutual_aid":
+            act_str = "mutual_aid"
+        elif atype == "log":
+            act_str = f'log:"{action.get("note","")[:20]}"'
+        else:
+            act_str = "wait"
+
+        # State snapshot
+        active = env.call_generator.active_calls if hasattr(env, "call_generator") else []
+        n_active = len(active)
+        pending = sum(1 for c in active if c.get("time_arrived") is None)
+        resolved = len(env.call_generator.resolved_calls) if hasattr(env, "call_generator") else 0
+        n_fatal = sum(1 for c in active + env.call_generator.resolved_calls if c.get("fatality"))
+
+        units_idle = sum(1 for u in env.units if u.status == "idle")
+        units_enroute = sum(1 for u in env.units if u.status == "en_route")
+        units_onscene = sum(1 for u in env.units if u.status == "on_scene")
+
+        # Pick most important recent event
+        events = self._obs.get("recent_events", []) if self._obs else []
+        key_event = ""
+        for e in reversed(events):
+            if any(k in e for k in ("New call", "cleared call", "fatality", "Mutual aid", "arrived at call")):
+                key_event = e
+                break
+        if not key_event and events:
+            key_event = events[-1]
+
+        evt_str = f" | {key_event}" if key_event else ""
+        return (
+            f"Step {step}: {act_str}"
+            f" | calls={n_active}(pending={pending}) resolved={resolved} fatal={n_fatal}"
+            f" | units idle={units_idle} enroute={units_enroute} onscene={units_onscene}"
+            f"{evt_str}"
+        )
+
     def step(self, action_text: str) -> str:
         """Execute one environment step from a raw text completion.
 

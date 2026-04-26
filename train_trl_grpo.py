@@ -249,12 +249,25 @@ def make_reward_fn(
             diff = difficulty[i] if isinstance(difficulty, list) else difficulty
 
             env = DispatchRGRPOEnv(seed=seed, difficulty=diff)
-            env.reset()
+            env.reset(seed=seed, difficulty=diff)
+
+            # Episode header
+            initial_calls = env._obs.get("active_calls", []) if env._obs else []
+            call_types = ", ".join(
+                f"{c.get('reported_type','?')}@{c.get('location','?')}"
+                for c in initial_calls
+            ) if initial_calls else "none"
+            print(
+                f"\n📋 Episode {i+1}/{len(prompts)} | seed={seed} | diff={diff} | "
+                f"calls=[{call_types}]"
+            )
 
             episode_trace = []
 
             # ── Step 0: use TRL's generation ──────────────────────────
+            parsed0 = env._parse_action(step0_completion)
             env.step(step0_completion)
+            print(f"  {env._format_step_log(parsed0)}")
             episode_trace.append(
                 {
                     "step": 0,
@@ -277,7 +290,9 @@ def make_reward_fn(
                 else:
                     completion = '{"action_type":"hold"}'
 
+                parsed = env._parse_action(completion)
                 env.step(completion)
+                print(f"  {env._format_step_log(parsed)}")
                 episode_trace.append(
                     {
                         "step": step_idx,
@@ -285,14 +300,6 @@ def make_reward_fn(
                         "completion": completion,
                     }
                 )
-
-                # Print step-wise progress every 10 steps
-                if step_idx % 10 == 0 or step_idx == 1:
-                    n_calls = len(env._obs.get("active_calls", [])) if env._obs else 0
-                    print(
-                        f"    [Episode {i+1}/{len(prompts)}] Step {step_idx}/{max_steps} | "
-                        f"active_calls={n_calls} | action={completion[:60]}..."
-                    )
 
             episode_reward = env.reward if env.reward is not None else 0.0
             rewards.append(float(episode_reward))
