@@ -281,6 +281,9 @@ def make_reward_fn(
                 f"\n📋 Episode {i+1}/{len(prompts)} | seed={seed} | diff={diff} | "
                 f"calls=[{call_types}]"
             )
+            # Debug: confirm epsilon-greedy code path is active
+            _dbg_explore = np.random.random() < 0.50
+            print(f"    [DEBUG] epsilon=0.50 | will_explore={_dbg_explore}")
 
             episode_trace = []
 
@@ -730,8 +733,8 @@ def main():
     # Monkey-patch the log method to intercept metrics
     _orig_log = trainer.log
 
-    def _log_with_metrics(logs, *args, **kw):
-        _orig_log(logs, *args, **kw)
+    def _log_with_metrics(logs, *_pos_args, **kw):
+        _orig_log(logs, *_pos_args, **kw)
         nonlocal _batch_counter
         _batch_counter += 1
 
