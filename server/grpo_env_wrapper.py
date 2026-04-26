@@ -162,36 +162,13 @@ class DispatchRGRPOEnv:
         return {"action_type": "hold"}
 
     def _format_prompt(self, obs: Dict[str, Any]) -> str:
-        """Format observation into a prompt for the LLM."""
-        lines = [
-            "# Emergency Dispatch Commander",
-            f"Step {obs['step_number']}/{obs['max_steps']}",
-            "",
-            "## Units",
-        ]
-        for u in obs.get("unit_statuses", []):
-            call_info = f" -> Call {u['current_call']}" if u.get("current_call") else ""
-            lines.append(
-                f"- Unit {u['unit_id']}: {u['last_known_status']} at Node {u['last_known_location']}{call_info}"
-            )
-        lines.append("")
-        lines.append("## Active Calls")
-        for c in obs.get("active_calls", []):
-            assigned = f" (Unit {c['assigned_unit']})" if c.get("assigned_unit") else ""
-            lines.append(
-                f"- Call {c['call_id']}: {c['reported_type']} at Node {c['location']} ({c['caller_tone']}) elapsed={c['time_elapsed']}min{assigned}"
-            )
-        lines.append("")
-        lines.append("## Traffic & Hospitals")
-        for alert in obs.get("traffic_alerts", []):
-            lines.append(f"- {alert}")
-        for h in obs.get("hospital_statuses", []):
-            lines.append(f"- Hospital {h['hospital_id']}: {h['reported_status']}")
-        lines.append("")
-        lines.append(f"Mutual aid remaining: {obs['mutual_aid_remaining']}")
-        lines.append("")
-        lines.append("Choose your next action using the available tools.")
-        return "\n".join(lines)
+        """Format observation into a prompt for the LLM.
+
+        Delegates to the shared ``format_observation`` so prompt formatting
+        stays consistent across training, inference, and wrapper usage.
+        """
+        from .prompt_utils import format_observation
+        return format_observation(obs)
 
     # ------------------------------------------------------------------
     # Individual tool methods (used by TRL when tool-call parsing works)

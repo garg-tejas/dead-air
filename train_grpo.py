@@ -23,7 +23,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from server.constants import MAX_STEPS
 from server.grpo_env_wrapper import DispatchRGRPOEnv
+from server.city_graph import CityGraph
 from server.prompt_utils import SYSTEM_PROMPT, build_chat_prompt, format_observation
+
+_CITY_GRAPH = CityGraph()  # static singleton for greedy distance lookups
 
 
 def greedy_action(obs: Dict) -> Dict:
@@ -43,7 +46,9 @@ def greedy_action(obs: Dict) -> Dict:
         best_dist = float("inf")
         for u in unit_statuses:
             if u.get("last_known_status") == "idle":
-                dist = abs(u.get("last_known_location", 0) - call["location"])
+                dist = _CITY_GRAPH.travel_time(
+                    u.get("last_known_location", 0), call["location"]
+                )
                 if dist < best_dist:
                     best_dist = dist
                     best_unit = u["unit_id"]

@@ -6,20 +6,30 @@ consistent prompt formatting everywhere.
 
 from typing import Dict
 
+from .constants import DEADLINES
+
 SYSTEM_PROMPT = (
-    "You are an emergency dispatch AI managing 6 ambulance units in a 20-node city. "
-    "Every step, output exactly one JSON object on the VERY LAST LINE.\n\n"
-    "RULES:\n"
-    '- If Active Calls is empty or says \'(none)\', output: {"action_type":"hold"}\n'
-    "- If there are active calls, dispatch the closest idle unit to the most urgent call.\n"
-    "- Keep reasoning to 1-2 sentences. Do not overthink.\n"
-    "- The JSON must be the very last thing you output. No markdown, no extra text after it.\n\n"
-    "ACTIONS:\n"
-    '{"action_type":"dispatch","unit_id":0,"call_id":1}\n'
-    '{"action_type":"hold"}\n'
-    '{"action_type":"verify","call_id":1}\n\n'
-    "Example (no calls): All units idle, no active calls. {\"action_type\":\"hold\"}\n"
-    "Example (with calls): Call 2 is cardiac (most urgent). Unit 1 is idle and closest. {\"action_type\":\"dispatch\",\"unit_id\":1,\"call_id\":2}"
+    "You are an emergency dispatch commander managing 6 ambulance units across a 20-node city.\n\n"
+    "OBJECTIVE: Minimize fatalities and response times. You are scored on:\n"
+    "- Response time vs optimal (50%): arrive before medical deadlines\n"
+    "- Fatality prevention (30%): missing a cardiac deadline causes a fatality\n"
+    "- Zone coverage (20%): keep units spread so every zone has nearby coverage\n\n"
+    "MEDICAL DEADLINES:\n"
+    "- cardiac: 8 min (life-threatening — highest priority)\n"
+    "- trauma: 12 min\n"
+    "- fire: 15 min\n"
+    "- false_alarm: no deadline (consider verifying before dispatching)\n\n"
+    "CALLER TONE hints at true severity: screaming > agitated > calm.\n"
+    "Ghost calls (no real emergency) and false alarms exist — use verify wisely.\n\n"
+    "AVAILABLE ACTIONS (output exactly one JSON as the final line):\n"
+    '{"action_type":"dispatch","unit_id":0,"call_id":1}  — send idle unit to call\n'
+    '{"action_type":"reroute","unit_id":0,"call_id":2}  — redirect en-route unit to higher priority call\n'
+    '{"action_type":"stage","unit_id":0,"location_node":5}  — pre-position idle unit for coverage\n'
+    '{"action_type":"verify","call_id":1}  — investigate suspicious call before committing a unit\n'
+    '{"action_type":"divert","unit_id":0,"hospital_id":1}  — send unit to specific hospital\n'
+    '{"action_type":"request_mutual_aid"}  — call external backup (limited uses)\n'
+    '{"action_type":"hold"}  — wait (use when no action improves the situation)\n\n'
+    "OUTPUT FORMAT: Reason briefly, then end with the JSON on its own line. No text after the JSON."
 )
 
 
@@ -42,8 +52,10 @@ def format_observation(obs: Dict) -> str:
     if active_calls:
         for c in active_calls:
             assigned = f" (Unit {c['assigned_unit']})" if c.get("assigned_unit") else ""
+            deadline = DEADLINES.get(c['reported_type'], '?')
             lines.append(
-                f"- Call {c['call_id']}: {c['reported_type']} at Node {c['location']} ({c['caller_tone']}) elapsed={c['time_elapsed']}min{assigned}"
+                f"- Call {c['call_id']}: {c['reported_type']} at Node {c['location']} "
+                f"({c['caller_tone']}) elapsed={c['time_elapsed']}min deadline={deadline}min{assigned}"
             )
     else:
         lines.append("(none)")
