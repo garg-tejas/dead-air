@@ -231,7 +231,7 @@ def make_reward_fn(
         return tokenizer.decode(gen_ids, skip_special_tokens=True)
 
     def _explore_action(env_ref) -> str:
-        """Epsilon-greedy: dispatch a random idle unit to a random pending call."""
+        """Epsilon-greedy: dispatch first idle unit to first pending call."""
         obs = env_ref._obs
         if not obs:
             return '{"action_type":"hold"}'
@@ -240,12 +240,14 @@ def make_reward_fn(
         idle = [u for u in units if u.get("last_known_status") == "idle"]
         pending = [c for c in active if c.get("assigned_unit") is None]
         if idle and pending:
-            u = idle[0]  # deterministic for reproducibility
+            u = idle[0]
             c = pending[0]
-            return (
+            action = (
                 f'{{"action_type":"dispatch","unit_id":{u["unit_id"]}'
                 f',"call_id":{c["call_id"]}}}'
             )
+            print(f"    🎲 EXPLORATION: {action}")
+            return action
         return '{"action_type":"hold"}'
 
     def reward_fn(
@@ -302,9 +304,9 @@ def make_reward_fn(
                 obs_text = format_observation(env._obs)
 
                 if model is not None:
-                    # Epsilon-greedy: 25% chance to dispatch nearest idle unit
+                    # Epsilon-greedy: 50% chance to dispatch first idle unit
                     # This prevents cold-start deadlock where all completions are hold
-                    if np.random.random() < 0.25:
+                    if np.random.random() < 0.50:
                         completion = _explore_action(env)
                     else:
                         completion = _generate_action(
@@ -728,8 +730,8 @@ def main():
     # Monkey-patch the log method to intercept metrics
     _orig_log = trainer.log
 
-    def _log_with_metrics(logs: dict[str, Any], **kw):
-        _orig_log(logs, **kw)
+    def _log_with_metrics(logs, *args, **kw):
+        _orig_log(logs, *args, **kw)
         nonlocal _batch_counter
         _batch_counter += 1
 
