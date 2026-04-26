@@ -162,7 +162,7 @@ def build_seed_dataset(
             # Advance env using cached action
             if step_idx < len(cached_steps):
                 action = cached_steps[step_idx]["action"]
-                env.step(action)
+                env.step(json.dumps(action))
 
     return Dataset.from_list(rows)
 
