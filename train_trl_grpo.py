@@ -248,8 +248,6 @@ def make_reward_fn(
             diff = difficulty[i] if isinstance(difficulty, list) else difficulty
 
             env = DispatchRGRPOEnv(seed=seed, difficulty=diff)
-            # env.reset() was already called during dataset construction
-            # but we need a fresh env here — reset re-seeds internally
             env.reset()
 
             episode_trace = []
@@ -276,7 +274,6 @@ def make_reward_fn(
                         model, obs_text, str(device)
                     )
                 else:
-                    # Fallback: greedy hold if no model reference
                     completion = '{"action_type":"hold"}'
 
                 env.step(completion)
@@ -288,10 +285,23 @@ def make_reward_fn(
                     }
                 )
 
-            episode_reward = (
-                env.reward if env.reward is not None else 0.0
-            )
+                # Print step-wise progress every 10 steps
+                if step_idx % 10 == 0 or step_idx == 1:
+                    n_calls = len(env._obs.get("active_calls", [])) if env._obs else 0
+                    print(
+                        f"    [Episode {i+1}/{len(prompts)}] Step {step_idx}/{max_steps} | "
+                        f"active_calls={n_calls} | action={completion[:60]}..."
+                    )
+
+            episode_reward = env.reward if env.reward is not None else 0.0
             rewards.append(float(episode_reward))
+
+            # Print episode summary
+            n_steps = len(episode_trace)
+            print(
+                f"  ✅ Episode {i+1}/{len(prompts)} DONE | "
+                f"seed={seed} | steps={n_steps} | reward={episode_reward:.3f}"
+            )
 
             # Write trajectory
             if traj_file:
@@ -471,6 +481,18 @@ def main():
     parser.add_argument("--push-to-hub", action="store_true")
     parser.add_argument("--hub-model-id", type=str, default=None)
     parser.add_argument("--hub-private", action="store_true")
+    parser.add_argument(
+        "--log-every",
+        type=int,
+        default=1,
+        help="Print metrics every N training steps.",
+    )
+    parser.add_argument(
+        "--save-every",
+        type=int,
+        default=25,
+        help="Save model checkpoint every N training steps.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -637,8 +659,11 @@ def main():
         peft_config=peft_config,
     )
 
-    # ── Curriculum callback wiring ────────────────────────────────────
+    # ── Metrics logging + curriculum callback wiring ──────────────────
     curriculum = None
+    _batch_counter = 0
+    _metrics_history = []
+
     if args.curriculum:
         curriculum = CurriculumCallback(
             trainer=trainer,
@@ -650,18 +675,51 @@ def main():
             f"🎓 Curriculum enabled (threshold={args.curriculum_threshold})"
         )
 
-        # Monkey-patch the log method to intercept reward metrics
-        _orig_log = trainer.log
+    # Monkey-patch the log method to intercept metrics
+    _orig_log = trainer.log
 
-        def _log_with_curriculum(logs: dict[str, Any], **kw):
-            _orig_log(logs, **kw)
-            mean_reward = logs.get(
-                "reward", logs.get("train/reward", None)
+    def _log_with_metrics(logs: dict[str, Any], **kw):
+        _orig_log(logs, **kw)
+        nonlocal _batch_counter
+        _batch_counter += 1
+
+        mean_reward = logs.get("reward", logs.get("train/reward", None))
+        loss = logs.get("loss", logs.get("train/loss", None))
+
+        # Print metrics
+        if _batch_counter % args.log_every == 0:
+            r_str = f"{mean_reward:.4f}" if mean_reward is not None else "N/A"
+            l_str = f"{loss:.4f}" if loss is not None else "N/A"
+            print(
+                f"\n📊 BATCH {_batch_counter} | reward={r_str} | loss={l_str}"
             )
-            if mean_reward is not None and curriculum is not None:
-                curriculum.on_batch_end(float(mean_reward))
 
-        trainer.log = _log_with_curriculum
+        # Save metrics to JSONL
+        metric_row = {
+            "batch": _batch_counter,
+            "reward": float(mean_reward) if mean_reward is not None else None,
+            "loss": float(loss) if loss is not None else None,
+        }
+        _metrics_history.append(metric_row)
+
+        metrics_path = os.path.join(args.output_dir, "metrics.jsonl")
+        with open(metrics_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(metric_row) + "\n")
+
+        # Curriculum escalation check
+        if mean_reward is not None and curriculum is not None:
+            curriculum.on_batch_end(float(mean_reward))
+
+        # Periodic model checkpoint save
+        if _batch_counter % args.save_every == 0:
+            ckpt_path = os.path.join(
+                args.output_dir, f"checkpoint-{_batch_counter}"
+            )
+            trainer.save_model(ckpt_path)
+            tokenizer.save_pretrained(ckpt_path)
+            print(f"💾 Saved checkpoint to {ckpt_path}")
+
+    trainer.log = _log_with_metrics
 
     # ── Train ─────────────────────────────────────────────────────────
     print("=" * 60)
