@@ -17,13 +17,30 @@ Usage (on Lightning AI L4):
         --batch-size 8
 """
 
+import os
+import sys
+
+
+def _configure_stdio() -> None:
+    """Force UTF-8 stdio early so third-party banners cannot break job logs."""
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    os.environ.setdefault("PYTHONUTF8", "1")
+
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None or not hasattr(stream, "reconfigure"):
+            continue
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+_configure_stdio()
+
 import unsloth  # Must be first, before transformers
 
 import argparse
 import gc
 import json
 import math
-import os
 import shutil
 import time
 from pathlib import Path
@@ -842,7 +859,7 @@ def main():
             f"difficulty={current_difficulty}, epsilon={last_epsilon:.2f}"
         )
     elif args.curriculum:
-        print(f"🎓 Curriculum enabled: {curriculum_phases}")
+        print(f"[CURRICULUM] enabled: {curriculum_phases}")
         print(f"   Starting at: {current_difficulty}")
 
     next_checkpoint_episode = 0
@@ -917,7 +934,7 @@ def main():
                     episodes_in_phase = 0
                     phase_reward_buffer = []
                     print(
-                        f"🎓 CURRICULUM ESCALATED to {current_difficulty}! "
+                        f"[CURRICULUM] escalated to {current_difficulty}! "
                         f"({args.curriculum_min_episodes}+ episodes, reward >= {args.curriculum_escalate_threshold})"
                     )
 
@@ -944,7 +961,7 @@ def main():
 
             loss: Optional[float] = None
             if all(r == 0 for r in rewards):
-                print("All rewards zero — skipping update")
+                print("All rewards zero - skipping update")
             else:
                 torch.cuda.empty_cache()
                 gc.collect()

@@ -261,7 +261,7 @@ class ConsoleReporter:
         else:
             eta_str = "---"
 
-        print(f"\n  BATCH {batch + 1}/{num_batches}  |  Episodes: {total_eps}  |  Difficulty: {difficulty:>8}  |  ε={eps:.2f}  |  ETA: {eta_str}")
+        print(f"\n  BATCH {batch + 1}/{num_batches}  |  Episodes: {total_eps}  |  Difficulty: {difficulty:>8}  |  eps={eps:.2f}  |  ETA: {eta_str}")
         print("  " + "-" * 96)
         print(f"  Reward    mean={mean_r:+.4f}  std={std_r:.4f}  min={record['min_reward']:+.4f}  max={record['max_reward']:+.4f}  median={record['median_reward']:+.4f}")
         print(f"  Moving    MA5={ma5:+.4f}  MA10={ma10:+.4f}  BEST={best:+.4f}  (last improved {since_improve} eps ago)")
@@ -306,7 +306,7 @@ class TrainingPlotter:
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
         except ImportError:
-            print("[WARN] matplotlib not available — skipping plot generation")
+            print("[WARN] matplotlib not available - skipping plot generation")
             return ""
 
         if not self.tracker.records:
