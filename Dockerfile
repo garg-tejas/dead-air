@@ -1,5 +1,15 @@
-# Slim HF Spaces Dockerfile for DispatchR environment server.
-# Only installs runtime deps — no training libraries.
+# DispatchR Environment Server — HF Spaces Dockerfile
+# Combines the slim build from the root fix with the HEALTHCHECK and
+# PYTHONPATH conventions from the OpenEnv template.
+#
+# Design choices:
+#   - python:3.11-slim (not openenv-base) → smaller image, faster build
+#   - pip (not uv) → works in standard HF Spaces build environment
+#   - single-stage (not multi-stage) → simpler, no uv.lock dependency
+#   - USER 1000 → required by HF Spaces
+#   - port 7860 → HF Spaces proxy port
+#   - only runtime deps → no training libraries
+
 FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -16,6 +26,7 @@ RUN useradd -m -u 1000 user
 WORKDIR /app
 USER 1000
 ENV PATH="/home/user/.local/bin:${PATH}"
+ENV PYTHONPATH="/app:$PYTHONPATH"
 
 # Copy and install ONLY runtime dependencies (no training libs)
 COPY --chown=user pyproject.toml .
@@ -30,6 +41,10 @@ RUN pip install --no-cache-dir --user \
 
 # Copy environment code
 COPY --chown=user . .
+
+# Health check (from OpenEnv template)
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:7860/health || exit 1
 
 # Expose the HF Spaces port
 EXPOSE 7860
