@@ -451,7 +451,10 @@ def main():
     )
     parser.add_argument("--save-steps", type=int, default=50)
     parser.add_argument(
-        "--max-completion-length", type=int, default=512
+        "--max-completion-length",
+        type=int,
+        default=512,
+        help="Max tokens per action. 512 is safe for 48GB GPUs. Use 1024+ only on 80GB A100.",
     )
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--lora-r", type=int, default=16)
@@ -505,8 +508,8 @@ def main():
         vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
         print(f"GPU: {gpu_name} ({vram_gb:.0f} GB)")
         if vram_gb < 70:
-            # L40S (48GB) or smaller — give vLLM more room since model is smaller
-            vllm_mem_util = 0.55
+            # L40S (48GB) — keep vLLM modest so training forward pass fits
+            vllm_mem_util = 0.45
             print(f"  Detected mid-range GPU — vLLM memory util = {vllm_mem_util}")
         if vram_gb < 30 and not args.no_vllm:
             print(
@@ -515,6 +518,13 @@ def main():
             )
     else:
         print("No CUDA GPU found — training on CPU (very slow).")
+
+    # Warn if token budget is too aggressive for the GPU
+    if vram_gb < 70 and args.max_completion_length > 512:
+        print(
+            f"WARN: max_completion_length={args.max_completion_length} on {vram_gb:.0f}GB GPU "
+            f"may OOM. Consider --max-completion-length 512 or --batch-size 4."
+        )
 
     # ── Tokenizer ─────────────────────────────────────────────────────
     print(f"\nLoading tokenizer: {args.model}")
