@@ -60,7 +60,7 @@ class DispatchRGRPOEnv:
             self._episode_reward = self._obs["reward"]
         return "\n".join(events) if events else "Action executed."
 
-    def _format_step_log(self, action: Dict[str, Any]) -> str:
+    def _format_step_log(self, action: Dict[str, Any], raw_completion: str = "") -> str:
         """Return a concise one-line summary of the current step for tracing."""
         env = self._env
         step = env.step_count
@@ -106,11 +106,19 @@ class DispatchRGRPOEnv:
             key_event = events[-1]
 
         evt_str = f" | {key_event}" if key_event else ""
+
+        # Show raw completion (truncated) so we can diagnose parse failures
+        raw = raw_completion.strip().replace("\n", " ")
+        if len(raw) > 60:
+            raw = raw[:60] + "..."
+        if raw:
+            raw = f' | raw="{raw}"'
+
         return (
             f"Step {step}: {act_str}"
             f" | calls={n_active}(pending={pending}) resolved={resolved} fatal={n_fatal}"
             f" | units idle={units_idle} enroute={units_enroute} onscene={units_onscene}"
-            f"{evt_str}"
+            f"{evt_str}{raw}"
         )
 
     def step(self, action_text: str) -> str:

@@ -285,7 +285,7 @@ def make_reward_fn(
             # ── Step 0: use TRL's generation ──────────────────────────
             parsed0 = env._parse_action(step0_completion)
             env.step(step0_completion)
-            print(f"  {env._format_step_log(parsed0)}")
+            print(f"  {env._format_step_log(parsed0, step0_completion)}")
             episode_trace.append(
                 {
                     "step": 0,
@@ -315,7 +315,7 @@ def make_reward_fn(
 
                 parsed = env._parse_action(completion)
                 env.step(completion)
-                print(f"  {env._format_step_log(parsed)}")
+                print(f"  {env._format_step_log(parsed, completion)}")
                 episode_trace.append(
                     {
                         "step": step_idx,

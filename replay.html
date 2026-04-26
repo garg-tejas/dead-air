@@ -503,6 +503,7 @@
         [5, 10],
         [2, 13],
       ];
+      const BRIDGE_EDGE_KEYS = new Set(["3-4", "11-12", "15-19", "0-16"]);
       const ZONE_CENTERS = {
         downtown: [3.5, 19],
         highway: [19.5, 19],
@@ -510,6 +511,16 @@
         industrial: [19.5, 10],
         suburbs: [11.5, 2.5],
       };
+      const ROAD_NAMES = new Map([
+        ["0-1", "Main St"],
+        ["1-2", "2nd Ave"],
+        ["2-3", "3rd Ave"],
+        ["3-4", "Downtown Bridge"],
+        ["7-12", "Industrial Access"],
+        ["11-12", "Mountain Bridge"],
+        ["15-19", "East Bridge"],
+        ["0-16", "Long Route N"],
+      ]);
       const state = {
         episode: [],
         loaded: false,
@@ -568,6 +579,7 @@
         return [px, py];
       }
       const lerp = (a, b, t) => a + (b - a) * t;
+      const edgeKey = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
       function unitPosition(unit, t) {
         const chain = [unit.location, ...(unit.path_remaining || [])];
         if (unit.status !== "en_route" || chain.length < 2)
@@ -587,6 +599,56 @@
         !!alerts?.some(
           (a) => String(a).includes(String(u)) && String(a).includes(String(v)),
         );
+      function drawRiver(phaseSec) {
+        const rect = stage.getBoundingClientRect();
+        const flow = (phaseSec * 55) % 30;
+
+        ctx.save();
+        ctx.globalAlpha = 0.2;
+        ctx.fillStyle = "#0ea5e9";
+        ctx.beginPath();
+        ctx.moveTo(0, rect.height);
+        ctx.lineTo(0, rect.height * 0.78);
+        ctx.bezierCurveTo(
+          rect.width * 0.35,
+          rect.height * 0.72,
+          rect.width * 0.52,
+          rect.height * 0.58,
+          rect.width * 0.58,
+          rect.height * 0.2,
+        );
+        ctx.bezierCurveTo(
+          rect.width * 0.64,
+          rect.height * 0.02,
+          rect.width * 0.73,
+          rect.height * 0.0,
+          rect.width * 0.9,
+          0,
+        );
+        ctx.lineTo(rect.width, 0);
+        ctx.lineTo(rect.width, rect.height);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(125, 211, 252, 0.22)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([8, 10]);
+        ctx.lineDashOffset = -flow;
+        ctx.beginPath();
+        ctx.moveTo(rect.width * 0.34, rect.height * 0.88);
+        ctx.bezierCurveTo(
+          rect.width * 0.4,
+          rect.height * 0.67,
+          rect.width * 0.62,
+          rect.height * 0.54,
+          rect.width * 0.74,
+          rect.height * 0.2,
+        );
+        ctx.stroke();
+        ctx.restore();
+      }
       function drawBackground() {
         const r = stage.getBoundingClientRect();
         const g = ctx.createLinearGradient(0, 0, 0, r.height);
@@ -611,10 +673,24 @@
           const [x0, y0] = worldToCanvas(u),
             [x1, y1] = worldToCanvas(v),
             broken = isBrokenEdge(u, v, frame.traffic_alerts || []);
+          const key = edgeKey(u, v);
+          const isBridge = BRIDGE_EDGE_KEYS.has(key);
+
+          ctx.save();
+          ctx.lineWidth = isBridge ? 8 : 6;
+          ctx.strokeStyle = isBridge ? "rgba(148, 163, 184, 0.26)" : "rgba(100, 116, 139, 0.18)";
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          ctx.stroke();
+          ctx.restore();
+
           ctx.save();
           ctx.lineWidth = broken ? 4 : 2;
           ctx.strokeStyle = broken ? COLORS.brokenEdge : COLORS.bgEdge;
           ctx.globalAlpha = broken ? 0.95 : 0.7;
+          ctx.lineCap = "round";
           if (broken) {
             ctx.setLineDash([8, 6]);
             ctx.lineDashOffset = -dash;
@@ -624,12 +700,51 @@
           ctx.lineTo(x1, y1);
           ctx.stroke();
           ctx.restore();
+
+          if (!broken) {
+            ctx.save();
+            ctx.strokeStyle = "rgba(226, 232, 240, 0.2)";
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 7]);
+            ctx.lineDashOffset = -dash * 0.5;
+            ctx.beginPath();
+            ctx.moveTo(x0, y0);
+            ctx.lineTo(x1, y1);
+            ctx.stroke();
+            ctx.restore();
+          } else if (isBridge) {
+            ctx.save();
+            ctx.strokeStyle = "rgba(239, 68, 68, 0.35)";
+            ctx.lineWidth = 11;
+            ctx.globalAlpha = 0.45 + Math.sin(phaseSec * 8) * 0.2;
+            ctx.beginPath();
+            ctx.moveTo(x0, y0);
+            ctx.lineTo(x1, y1);
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          const roadName = ROAD_NAMES.get(key);
+          if (roadName && (isBridge || broken)) {
+            const mx = (x0 + x1) / 2;
+            const my = (y0 + y1) / 2;
+            ctx.save();
+            ctx.font = "600 10px JetBrains Mono";
+            ctx.textAlign = "center";
+            ctx.fillStyle = broken ? "rgba(254, 202, 202, 0.85)" : "rgba(191, 219, 254, 0.65)";
+            ctx.fillText(roadName, mx, my - 8);
+            ctx.restore();
+          }
         }
       }
       function drawNodes() {
         for (let n = 0; n < 20; n++) {
           const c = COLORS[NODE_ZONES[n]],
             [x, y] = worldToCanvas(n);
+          ctx.fillStyle = "rgba(7, 12, 24, 0.55)";
+          ctx.beginPath();
+          ctx.arc(x, y + 2, 18, 0, Math.PI * 2);
+          ctx.fill();
           ctx.fillStyle = c;
           ctx.globalAlpha = 0.24;
           ctx.beginPath();
@@ -667,10 +782,19 @@
         for (const node of Object.values(HOSPITALS)) {
           const [x, y] = worldToCanvas(node),
             d = m.get(node) === "on_divert";
+          const pulse = 0.5 + Math.sin(performance.now() * 0.01) * 0.5;
+          ctx.fillStyle = d ? "rgba(239,68,68,0.22)" : "rgba(236,72,153,0.16)";
+          ctx.beginPath();
+          ctx.arc(x, y - 18, d ? 16 + pulse * 4 : 14, 0, Math.PI * 2);
+          ctx.fill();
           ctx.fillStyle = d ? COLORS.divert : COLORS.hospital;
           ctx.font = "700 22px JetBrains Mono";
           ctx.textAlign = "center";
           ctx.fillText("+", x, y - 18);
+          if (d) {
+            ctx.font = "700 9px JetBrains Mono";
+            ctx.fillText("DIVERT", x, y - 32);
+          }
         }
       }
       function drawCalls(frame, phaseSec) {
@@ -736,6 +860,7 @@
       }
       function drawBootScreen(sec) {
         drawBackground();
+        drawRiver(sec);
         drawEdges({ traffic_alerts: [] }, sec);
         drawNodes();
         drawCalls(
@@ -821,6 +946,7 @@
           t = subT(),
           frame = state.episode[i0];
         drawBackground();
+        drawRiver(nowSec);
         drawEdges(frame, nowSec);
         drawNodes();
         drawHospitals(frame);
