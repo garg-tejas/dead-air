@@ -230,6 +230,24 @@ def make_reward_fn(
         gen_ids = out[0, inputs.input_ids.shape[1] :]
         return tokenizer.decode(gen_ids, skip_special_tokens=True)
 
+    def _explore_action(env_ref) -> str:
+        """Epsilon-greedy: dispatch a random idle unit to a random pending call."""
+        obs = env_ref._obs
+        if not obs:
+            return '{"action_type":"hold"}'
+        active = obs.get("active_calls", [])
+        units = obs.get("unit_statuses", [])
+        idle = [u for u in units if u.get("last_known_status") == "idle"]
+        pending = [c for c in active if c.get("assigned_unit") is None]
+        if idle and pending:
+            u = idle[0]  # deterministic for reproducibility
+            c = pending[0]
+            return (
+                f'{{"action_type":"dispatch","unit_id":{u["unit_id"]}'
+                f',"call_id":{c["call_id"]}}}'
+            )
+        return '{"action_type":"hold"}'
+
     def reward_fn(
         prompts: list[str],
         completions: list[str],
@@ -284,9 +302,14 @@ def make_reward_fn(
                 obs_text = format_observation(env._obs)
 
                 if model is not None:
-                    completion = _generate_action(
-                        model, obs_text, str(device)
-                    )
+                    # Epsilon-greedy: 25% chance to dispatch nearest idle unit
+                    # This prevents cold-start deadlock where all completions are hold
+                    if np.random.random() < 0.25:
+                        completion = _explore_action(env)
+                    else:
+                        completion = _generate_action(
+                            model, obs_text, str(device)
+                        )
                 else:
                     completion = '{"action_type":"hold"}'
 
@@ -600,7 +623,7 @@ def main():
         run_name=f"dispatchr-{args.difficulty}",
         # ── generation ─────────────────────────────────────────────
         max_completion_length=args.max_completion_length,
-        num_generations=args.batch_size,  # rollouts per GRPO group
+        num_generations=2,  # GRPO group size (2 is enough for advantage calc)
         generation_batch_size=args.batch_size,  # completions vLLM generates per fwd pass
         use_vllm=not args.no_vllm,
         vllm_mode="colocate",  # vLLM shares GPU with trainer (no extra server)
