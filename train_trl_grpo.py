@@ -307,12 +307,13 @@ def make_reward_fn(
                 obs_text = format_observation(env._obs)
 
                 if model is not None:
-                    # Exploration: first 10 steps ALWAYS try to dispatch if possible.
-                    # After that, 50% random. This guarantees non-zero rewards even if
-                    # the policy model is stuck in hold-loop.
-                    if step_idx <= 10:
-                        completion = _explore_action(env)
-                    elif np.random.random() < 0.50:
+                    # Exploration: 10% chance to dispatch first idle unit to first
+                    # pending call. Only triggers when there are actual pending calls.
+                    # This keeps the model in control while guaranteeing some
+                    # exploration without destroying the learning signal.
+                    obs = env._obs
+                    pending = [c for c in obs.get("active_calls", []) if c.get("assigned_unit") is None] if obs else []
+                    if pending and np.random.random() < 0.10:
                         completion = _explore_action(env)
                     else:
                         completion = _generate_action(
@@ -337,9 +338,11 @@ def make_reward_fn(
 
             # Print episode summary
             n_steps = len(episode_trace)
+            parse_rate = env.parse_failures / n_steps if n_steps > 0 else 0.0
             print(
                 f"  ✅ Episode {i+1}/{len(prompts)} DONE | "
-                f"seed={seed} | steps={n_steps} | reward={episode_reward:.3f}"
+                f"seed={seed} | steps={n_steps} | reward={episode_reward:.3f} | "
+                f"parse_fails={env.parse_failures}({parse_rate:.1%})"
             )
 
             # Write trajectory

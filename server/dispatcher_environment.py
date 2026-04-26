@@ -62,6 +62,9 @@ class DispatcherEnvironment(Environment):
         self._hold_count = 0
         self._dispatch_count = 0
 
+        # Per-step dense reward accumulator (added to episode reward)
+        self._step_reward_accumulator = 0.0
+
         self._state = State(episode_id=str(uuid4()), step_count=0)
 
     def reseed(self, seed: int) -> None:
@@ -131,9 +134,16 @@ class DispatcherEnvironment(Environment):
         self._invalid_action_count = 0
         self._hold_count = 0
         self._dispatch_count = 0
+
+        # Reset per-step reward accumulator
+        self._step_reward_accumulator = 0.0
+
         # Seed last known statuses with initial unit states
         for u in self.units:
             self._last_known_statuses[u.unit_id] = u.get_observable_status()
+
+        # Disable radio delay during training to prevent false-negative feedback
+        self.radio_buffer.delay_prob = 0.0
 
         # Initial observation
         return self._build_observation(reward=0.0)
@@ -280,6 +290,9 @@ class DispatcherEnvironment(Environment):
             # Start from base reward (includes perfect-run bonus if earned)
             reward = result["total_reward"]
 
+            # Add per-step dense reward accumulator
+            reward += self._step_reward_accumulator
+
             # Apply action-validity shaping (anti-hacking layer)
             # Valid actions are rewarded; invalid actions and excessive holding are penalized
             validity_bonus = 0.0
@@ -321,9 +334,16 @@ class DispatcherEnvironment(Environment):
         return obs
 
     def _process_action(self, action: Dict[str, Any]) -> List[str]:
-        """Process a dispatch action. Returns events."""
+        """Process a dispatch action. Returns events.
+
+        Also applies per-step dense reward shaping:
+        +0.02  valid dispatch (immediate positive feedback)
+        -0.02  invalid action (discourage errors)
+        -0.01  hold when pending calls exist (discourage inaction)
+        """
         events = []
         action_type = action.get("action_type", "hold")
+        pending_calls = [c for c in self.call_generator.active_calls if c.get("assigned_unit") is None]
 
         if action_type == "dispatch":
             uid = action.get("unit_id")
@@ -335,8 +355,10 @@ class DispatcherEnvironment(Environment):
                 unit.dispatch(cid, call["location"], path, call_type=call.get("call_type", "trauma"))
                 call["assigned_unit"] = uid
                 events.append(f"Dispatched Unit {uid} to Call {cid}")
+                self._step_reward_accumulator += 0.02
             else:
                 events.append(f"Invalid dispatch: unit {uid} or call {cid} unavailable")
+                self._step_reward_accumulator -= 0.02
 
         elif action_type == "reroute":
             uid = action.get("unit_id")
@@ -348,8 +370,10 @@ class DispatcherEnvironment(Environment):
                 unit.reroute(cid, call["location"], path, call_type=call.get("call_type", "trauma"))
                 call["assigned_unit"] = uid
                 events.append(f"Rerouted Unit {uid} to Call {cid}")
+                self._step_reward_accumulator += 0.01
             else:
                 events.append(f"Invalid reroute: unit {uid} not en_route")
+                self._step_reward_accumulator -= 0.02
 
         elif action_type == "verify":
             cid = action.get("call_id")
@@ -357,8 +381,10 @@ class DispatcherEnvironment(Environment):
             if call:
                 confidence = self.call_generator.verify_call(cid)
                 events.append(f"Verified Call {cid}: {confidence} confidence")
+                self._step_reward_accumulator += 0.01
             else:
                 events.append(f"Invalid verify: call {cid} not found")
+                self._step_reward_accumulator -= 0.02
 
         elif action_type == "stage":
             uid = action.get("unit_id")
@@ -369,8 +395,10 @@ class DispatcherEnvironment(Environment):
                 path = self.city_graph.path(unit.location, loc)
                 unit.stage(loc, path)
                 events.append(f"Staged Unit {uid} to Node {loc}")
+                self._step_reward_accumulator += 0.01
             else:
                 events.append(f"Invalid stage: unit {uid} unavailable or invalid location {loc}")
+                self._step_reward_accumulator -= 0.02
 
         elif action_type == "request_mutual_aid":
             if self.mutual_aid_used < MUTUAL_AID_BUDGET:
@@ -387,8 +415,10 @@ class DispatcherEnvironment(Environment):
                     },
                 })
                 events.append(f"Mutual aid requested. External Unit {aid_unit_id} arriving in 6 steps.")
+                self._step_reward_accumulator += 0.01
             else:
                 events.append("Mutual aid budget exhausted")
+                self._step_reward_accumulator -= 0.02
 
         elif action_type == "divert":
             uid = action.get("unit_id")
@@ -401,11 +431,16 @@ class DispatcherEnvironment(Environment):
                 unit.path_remaining = path[1:] if len(path) > 1 else []
                 unit.status = "en_route"
                 events.append(f"Diverted Unit {uid} to Hospital {hid} ({hospital.name})")
+                self._step_reward_accumulator += 0.01
             else:
                 events.append(f"Invalid divert: unit {uid} or hospital {hid}")
+                self._step_reward_accumulator -= 0.02
 
         elif action_type == "hold":
             events.append("Hold. No action taken.")
+            if pending_calls:
+                # Penalize holding when there are pending calls (urgency!)
+                self._step_reward_accumulator -= 0.01
 
         elif action_type == "log":
             note = action.get("note", "")

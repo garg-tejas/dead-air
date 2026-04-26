@@ -29,6 +29,7 @@ class DispatchRGRPOEnv:
         self._obs: Optional[Dict[str, Any]] = None
         self._episode_reward: Optional[float] = None
         self._events_log: list = []
+        self._parse_failures: int = 0  # Count of times _parse_action fell back to hold
 
     def reset(self, **kwargs: Any) -> str:
         """Reset the environment and return the initial prompt string.
@@ -47,6 +48,7 @@ class DispatchRGRPOEnv:
         self._obs = self._env.reset(difficulty=diff)
         self._episode_reward = None
         self._events_log.clear()
+        self._parse_failures = 0
         return self._format_prompt(self._obs)
 
     def _step(self, action: Dict[str, Any]) -> str:
@@ -151,6 +153,7 @@ class DispatchRGRPOEnv:
         """
         text = text.strip()
         if not text:
+            self._parse_failures += 1
             return {"action_type": "hold"}
 
         # Prefer a final JSON action if one is present anywhere in the output.
@@ -220,6 +223,7 @@ class DispatchRGRPOEnv:
             return {"action_type": "request_mutual_aid"}
 
         # Fallback: hold
+        self._parse_failures += 1
         return {"action_type": "hold"}
 
     def _format_prompt(self, obs: Dict[str, Any]) -> str:
@@ -342,6 +346,11 @@ class DispatchRGRPOEnv:
     def disable_internal_curriculum(self) -> None:
         """Disable the env's internal curriculum when the training script manages it."""
         self._env._use_internal_curriculum = False
+
+    @property
+    def parse_failures(self) -> int:
+        """Number of parse failures in this episode (action fell back to hold)."""
+        return self._parse_failures
 
     @property
     def env(self) -> DispatcherEnvironment:
