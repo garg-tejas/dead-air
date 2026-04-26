@@ -538,8 +538,9 @@ def main():
         vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
         print(f"GPU: {gpu_name} ({vram_gb:.0f} GB)")
         if vram_gb < 70:
-            # L40S (48GB) — give vLLM minimal room; training backward needs ~15GB
-            vllm_mem_util = 0.30
+            # L40S (48GB) — vLLM needs ~6GB KV cache for 40K context window;
+            # model weights ~8GB, so vLLM needs at least 14GB total.
+            vllm_mem_util = 0.35
             print(f"  Detected mid-range GPU — vLLM memory util = {vllm_mem_util}")
         if vram_gb < 30 and not args.no_vllm:
             print(
@@ -627,7 +628,7 @@ def main():
         generation_batch_size=args.batch_size,  # completions vLLM generates per fwd pass
         use_vllm=not args.no_vllm,
         vllm_mode="colocate",  # vLLM shares GPU with trainer (no extra server)
-        vllm_gpu_memory_utilization=vllm_mem_util,  # dynamic: 0.30 on 48GB, 0.40 on 80GB
+        vllm_gpu_memory_utilization=vllm_mem_util,  # dynamic: 0.35 on 48GB, 0.40 on 80GB
         temperature=0.7,
         top_p=0.9,
         # ── training ───────────────────────────────────────────────
