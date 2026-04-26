@@ -443,6 +443,12 @@ def main():
     parser.add_argument(
         "--max-completion-length", type=int, default=512
     )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=1024,
+        help="vLLM context window (prompt + completion). 1024 is plenty for DispatchR.",
+    )
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
@@ -673,7 +679,7 @@ def main():
         use_vllm=not args.no_vllm,
         vllm_mode="colocate",  # vLLM shares GPU with trainer (no extra server)
         vllm_gpu_memory_utilization=vllm_mem_util,  # dynamic: 0.55 on 48GB, 0.4 on 80GB
-        vllm_max_model_len=4096,  # prompt + completion context window
+        vllm_max_model_len=args.max_model_len,  # prompt + completion context window
         temperature=0.7,
         top_p=0.9,
         # ── training ───────────────────────────────────────────────
