@@ -648,13 +648,21 @@ def main():
     steps_per_epoch = max(1, len(dataset) // args.batch_size)
     target_epochs = max(1, args.episodes // steps_per_epoch)
 
+    requested_num_generations = args.num_generations
+    effective_num_generations = max(2, requested_num_generations)
+    if effective_num_generations != requested_num_generations:
+        print(
+            "WARN: GRPO requires at least 2 generations per prompt. "
+            f"Overriding --num-generations {requested_num_generations} -> {effective_num_generations}."
+        )
+
     grpo_config = GRPOConfig(
         # ── model / output ─────────────────────────────────────────
         output_dir=args.output_dir,
         run_name=f"dispatchr-{args.difficulty}",
         # ── generation ─────────────────────────────────────────────
         max_completion_length=256,       # hardcoded: 1536 causes OOM on 48GB
-        num_generations=1,               # 1 generation per prompt — reward variance comes from different seeds
+        num_generations=effective_num_generations,  # GRPO requires >=2 to compute advantages
         generation_batch_size=8,         # 8 completions per vLLM forward pass
         use_vllm=not args.no_vllm,
         vllm_mode="colocate",  # vLLM shares GPU with trainer (no extra server)
@@ -713,7 +721,8 @@ def main():
     # ── Trainer ───────────────────────────────────────────────────────
     print(f"\nInitialising GRPOTrainer...")
     print(f"  use_vllm:    {not args.no_vllm}")
-    print(f"  batch_size:  {args.batch_size}  (num_generations)")
+    print(f"  num_generations: {effective_num_generations}")
+    print(f"  batch_size:      {args.batch_size}")
     print(f"  grad_accum:  {args.grad_accum}")
     print(
         f"  epochs:      {target_epochs}  "
