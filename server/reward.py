@@ -134,40 +134,4 @@ class RewardComputer:
 
         return len(covered_zones) / len(zones)
 
-    def compute_evaluation_metrics(
-        self,
-        calls: List[Dict[str, Any]],
-        event_triggered: bool,
-        pre_event_fatalities: int,
-        post_event_fatalities: int,
-        total_distance: float,
-        max_distance: float,
-    ) -> Dict[str, float]:
-        """Compute evaluation metrics (not used for training)."""
-        # Caller inference score
-        caller_inference = 0.0
-        for call in calls:
-            panic = call.get("panic_modifier", 1.0)
-            dispatched_quickly = call.get("time_elapsed", 999) <= 2
-            held_or_downgraded = not call.get("assigned_unit") and call.get("time_elapsed", 0) > 5
 
-            if panic < 0.8 and dispatched_quickly:
-                caller_inference += 0.05
-            if panic > 1.3 and held_or_downgraded:
-                caller_inference += 0.03
-
-        # Event adaptation score
-        event_adaptation = 1.0
-        if event_triggered and post_event_fatalities > 0:
-            event_adaptation = pre_event_fatalities / max(1, post_event_fatalities)
-
-        # Efficiency score
-        efficiency = 1.0
-        if max_distance > 0:
-            efficiency = 1.0 - (total_distance / max_distance)
-
-        return {
-            "caller_inference_score": min(1.0, caller_inference),
-            "event_adaptation_score": event_adaptation,
-            "efficiency_score": efficiency,
-        }

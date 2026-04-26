@@ -339,6 +339,10 @@ class DispatchRGRPOEnv:
             return None
         return self._env.get_ground_truth()
 
+    def disable_internal_curriculum(self) -> None:
+        """Disable the env's internal curriculum when the training script manages it."""
+        self._env._use_internal_curriculum = False
+
     @property
     def env(self) -> DispatcherEnvironment:
         """Access the underlying environment."""

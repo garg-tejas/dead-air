@@ -57,8 +57,4 @@ class AdversarialCityDesigner:
                 bias[key.split(":")[1]] = min(0.5, count * 0.1)
         return bias
 
-    def get_event_boost(self, event_name: str) -> float:
-        """Return probability boost for a specific event type."""
-        key = f"event:{event_name}"
-        count = self.weaknesses.get(key, 0)
-        return min(0.3, count * 0.1)
+

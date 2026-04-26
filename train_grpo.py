@@ -371,7 +371,6 @@ def compute_grpo_loss(
             ratio,
             clipped,
             batch_loss,
-            scaled_loss,
         )
         torch.cuda.empty_cache()
 
@@ -549,9 +548,7 @@ def main():
     greedy_rewards = []
     for _ in range(5):
         obs = env_check.reset(difficulty=args.difficulty)
-        env_check.radio_buffer.delay_prob = 0.0
-        for u in env_check.units:
-            env_check._last_known_statuses[u.unit_id] = u.get_observable_status()
+        env_check.set_full_visibility(enabled=True)
         done = False
         step_count = 0
         while not done and step_count < 100:

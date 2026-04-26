@@ -31,6 +31,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
+from huggingface_hub.utils import HfHubHTTPError
 from transformers import AutoTokenizer
 
 # Suppress noisy transformers deprecation warnings during training
@@ -410,7 +411,7 @@ def main():
                 private=args.hub_private,
             )
             print(f"Model repo ready: https://huggingface.co/{args.hub_model_id}")
-        except Exception as _e:
+        except HfHubHTTPError as _e:
             print(f"[WARN] Could not create/verify model repo: {_e}")
 
     # ------------------------------------------------------------------
@@ -518,7 +519,7 @@ def main():
             # Disable env internal curriculum when training script manages it
             if args.curriculum:
                 for env in envs:
-                    env._env._use_internal_curriculum = False
+                    env.disable_internal_curriculum()
 
             episodes, rewards, trajectory = run_episodes_batched(
                 model,
@@ -688,7 +689,7 @@ def main():
                             commit_message="Update training state (for resume)",
                         )
                         print(f"Pushed checkpoint to https://huggingface.co/{args.hub_model_id}")
-                    except Exception as e:
+                    except HfHubHTTPError as e:
                         print(f"[WARN] HF Hub push failed: {e}")
 
     except KeyboardInterrupt:
@@ -733,7 +734,7 @@ def main():
                     commit_message="Update training state (interrupted)",
                 )
                 print(f"Pushed emergency checkpoint to https://huggingface.co/{args.hub_model_id}")
-            except Exception as e:
+            except HfHubHTTPError as e:
                 print(f"[WARN] HF Hub push failed: {e}")
     finally:
         if trajectory_writer:
@@ -780,7 +781,7 @@ def main():
                 commit_message="Final training state",
             )
             print(f"Pushed final checkpoint to https://huggingface.co/{args.hub_model_id}")
-        except Exception as e:
+        except HfHubHTTPError as e:
             print(f"[WARN] HF Hub push failed: {e}")
 
     # Save metrics

@@ -62,9 +62,6 @@ class DispatcherEnvironment(Environment):
         self._hold_count = 0
         self._dispatch_count = 0
 
-        # Response-time tracking per call
-        self._call_first_dispatch_step: Dict[int, int] = {}
-
         self._state = State(episode_id=str(uuid4()), step_count=0)
 
     def reseed(self, seed: int) -> None:
@@ -134,14 +131,26 @@ class DispatcherEnvironment(Environment):
         self._invalid_action_count = 0
         self._hold_count = 0
         self._dispatch_count = 0
-        self._call_first_dispatch_step = {}
-
         # Seed last known statuses with initial unit states
         for u in self.units:
             self._last_known_statuses[u.unit_id] = u.get_observable_status()
 
         # Initial observation
         return self._build_observation(reward=0.0)
+
+    def set_full_visibility(self, enabled: bool = True) -> None:
+        """Enable/disable full observability for demo/eval/diagnose.
+
+        When enabled:
+        - Radio delay is disabled (status updates are immediate)
+        - Last known statuses are seeded with true current statuses
+        """
+        if enabled:
+            self.radio_buffer.delay_prob = 0.0
+            for u in self.units:
+                self._last_known_statuses[u.unit_id] = u.get_observable_status()
+        else:
+            self.radio_buffer.delay_prob = 0.10
 
     def step(self, action: Dict[str, Any]) -> Dict[str, Any]:
         """Execute one dispatch step."""
@@ -167,10 +176,6 @@ class DispatcherEnvironment(Environment):
         elif action_type == "dispatch" and not has_invalid:
             self._valid_action_count += 1
             self._dispatch_count += 1
-            # Track first dispatch time per call
-            cid = action.get("call_id")
-            if cid is not None and cid not in self._call_first_dispatch_step:
-                self._call_first_dispatch_step[cid] = self.step_count
         elif action_type in ("reroute", "stage", "divert", "request_mutual_aid", "verify", "log"):
             self._valid_action_count += 1
 

@@ -91,13 +91,15 @@ class EventScheduler:
         events = []
         if event_name == "bridge_collapse":
             # Delay edges crossing between downtown/highway and hills/industrial
-            # Simplified: add accident on key bridge edges
+            # Use multipliers so weights stay correct even if constants.py changes
             traffic_model.add_accident(5, 10, 3.0)
             traffic_model.add_accident(2, 13, 3.0)
             # Actually update city graph so units route around the collapsed bridge
             if city_graph is not None:
-                city_graph.update_edge_weight(5, 10, 21.0)  # was 7, now 3x
-                city_graph.update_edge_weight(2, 13, 18.0)  # was 6, now 3x
+                orig_5_10 = city_graph.graph.get_edge_data(5, 10, {}).get("weight", 7)
+                orig_2_13 = city_graph.graph.get_edge_data(2, 13, {}).get("weight", 6)
+                city_graph.update_edge_weight(5, 10, orig_5_10 * 3.0)
+                city_graph.update_edge_weight(2, 13, orig_2_13 * 3.0)
             events.append("Bridge collapse: Route 7 and Central Ave crossings x3")
         elif event_name == "hospital_divert":
             # Force County General on divert

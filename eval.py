@@ -55,10 +55,7 @@ def run_episodes(
     for ep in range(num_episodes):
         obs = env.reset(difficulty=difficulty)
         # Disable radio delay for baseline evaluation so greedy agent sees true status
-        env.radio_buffer.delay_prob = 0.0
-        # Also seed last_known_statuses with fresh true statuses
-        for u in env.units:
-            env._last_known_statuses[u.unit_id] = u.get_observable_status()
+        env.set_full_visibility(enabled=True)
         done = False
         step_count = 0
         while not done and step_count < 100:

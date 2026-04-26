@@ -81,10 +81,7 @@ def run_diagnostic(
         obs = env.reset(difficulty="learning")
         # Disable radio delay for greedy baseline so it sees true status
         if agent_type == "greedy":
-            env.radio_buffer.delay_prob = 0.0
-            # Also seed last_known_statuses with fresh true statuses
-            for u in env.units:
-                env._last_known_statuses[u.unit_id] = u.get_observable_status()
+            env.set_full_visibility(enabled=True)
         done = False
         step = 0
         episode_actions = []

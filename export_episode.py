@@ -15,6 +15,18 @@ sys.path.insert(0, ".")
 from server.dispatcher_environment import DispatcherEnvironment
 
 
+def _dedup_calls(calls):
+    """Deduplicate calls by call_id (a call may appear in both active and resolved lists)."""
+    seen = set()
+    result = []
+    for c in calls:
+        cid = c["call_id"]
+        if cid not in seen:
+            seen.add(cid)
+            result.append(c)
+    return result
+
+
 def run_and_export(difficulty: str = "learning", output: str = "episode.json", seed: int = 42):
     env = DispatcherEnvironment(seed=seed)
     # Disable radio delay for deterministic, consistent episode export
@@ -74,7 +86,7 @@ def run_and_export(difficulty: str = "learning", output: str = "episode.json", s
                     "severity_modifier": c.get("severity_modifier", 1.0),
                     "panic_modifier": c.get("panic_modifier", 1.0),
                 }
-                for c in env.call_generator.active_calls + env.call_generator.resolved_calls
+                for c in _dedup_calls(env.call_generator.active_calls + env.call_generator.resolved_calls)
             ],
         }
         episode_log.append(state)

@@ -52,35 +52,35 @@ We set out to build the first RL environment for emergency medical dispatch — 
 
 ### What We Built
 
-| Component                          | Planned       | Built                                                                     | Status       |
-| ---------------------------------- | ------------- | ------------------------------------------------------------------------- | ------------ |
-| 20-node city with 5 zones          | Yes           | Yes — NetworkX graph, precomputed Dijkstra all-pairs shortest paths       | Complete     |
-| 6-unit fleet with state machine    | Yes           | Yes — idle/en_route/on_scene/returning/out_of_service                     | Complete     |
-| Call generator (Poisson arrivals)  | Yes           | Yes — cardiac/trauma/fire/false_alarm with hidden severity modifiers      | Complete     |
-| Caller panic bias                  | Yes           | Yes — hidden panic_modifier per call, zone-level bias randomization       | Complete     |
-| Radio delay buffer (POMDP)         | Yes           | Yes — 10% chance status updates lag 2-3 steps                             | Complete     |
-| Hospital capacity model            | Yes           | Yes — 3 hospitals, hidden capacity, noisy divert signals                  | Complete     |
-| Traffic model                      | Yes           | Yes — time-varying edge weights, accident injection                       | Complete     |
-| City event scheduler               | Yes           | Yes — bridge collapse, hospital divert, heatwave, unit breakdown          | Complete     |
-| Adversarial city designer          | Yes           | Yes — weakness tracker, dynamic bias toward agent failure modes           | Complete     |
-| Curriculum controller              | Yes           | Yes — 4 phases: Warmup/Learning/Advanced/Expert, auto-escalation          | Complete     |
-| Ghost calls (deepfake emergencies) | Yes           | Yes — 0-10% rate, verify action with noisy confidence                     | Complete     |
-| Dijkstra oracle for scoring        | Yes           | Yes — O(1) lookup via precomputed shortest paths                          | Complete     |
+| Component                          | Planned       | Built                                                                          | Status       |
+| ---------------------------------- | ------------- | ------------------------------------------------------------------------------ | ------------ |
+| 20-node city with 5 zones          | Yes           | Yes — NetworkX graph, precomputed Dijkstra all-pairs shortest paths            | Complete     |
+| 6-unit fleet with state machine    | Yes           | Yes — idle/en_route/on_scene/returning/out_of_service                          | Complete     |
+| Call generator (Poisson arrivals)  | Yes           | Yes — cardiac/trauma/fire/false_alarm with hidden severity modifiers           | Complete     |
+| Caller panic bias                  | Yes           | Yes — hidden panic_modifier per call, zone-level bias randomization            | Complete     |
+| Radio delay buffer (POMDP)         | Yes           | Yes — 10% chance status updates lag 2-3 steps                                  | Complete     |
+| Hospital capacity model            | Yes           | Yes — 3 hospitals, hidden capacity, noisy divert signals                       | Complete     |
+| Traffic model                      | Yes           | Yes — time-varying edge weights, accident injection                            | Complete     |
+| City event scheduler               | Yes           | Yes — bridge collapse, hospital divert, heatwave, unit breakdown               | Complete     |
+| Adversarial city designer          | Yes           | Yes — weakness tracker, dynamic bias toward agent failure modes                | Complete     |
+| Curriculum controller              | Yes           | Yes — 4 phases: Warmup/Learning/Advanced/Expert, auto-escalation               | Complete     |
+| Ghost calls (deepfake emergencies) | Yes           | Yes — 0-10% rate, verify action with noisy confidence                          | Complete     |
+| Dijkstra oracle for scoring        | Yes           | Yes — O(1) lookup via precomputed shortest paths                               | Complete     |
 | 3-component reward system          | Yes           | Yes — response score (50%), fatality (30%), coverage (20%) + perfect-run bonus | Complete     |
-| Action validity shaping            | Yes           | Yes — bonus for valid actions, penalty for invalid/hold                   | Complete     |
-| **TRL GRPOTrainer training**       | Yes           | Yes — vLLM colocation, seed manifest dataset, curriculum callback         | Complete     |
-| **HF Hub auto-push**               | Yes           | Yes — auto-create repo, push checkpoints every 25 batches, final model    | Complete     |
-| Unsloth-accelerated training       | Yes           | Yes — FastLanguageModel integration (fallback for 24GB GPUs)              | Complete     |
-| Custom GRPO loop (fallback)        | Yes           | Yes — batched generation, microbatched loss                               | Complete     |
-| Colab training notebook            | Yes           | Yes — stripped-down version for free T4/L4                                | Complete     |
-| OpenEnv WebSocket server           | Yes           | Yes — FastAPI + openenv-core create_app                                   | Complete     |
-| HF Spaces deployment config        | Yes           | Yes — Docker-based, openenv.yaml, web UI enabled                          | Complete     |
-| Interactive terminal demo          | Yes           | Yes — greedy agent with real-time display                                 | Complete     |
-| Diagnostic tools                   | Yes           | Yes — per-episode breakdown, trajectory analysis, reward curves           | Complete     |
-| **Rich step-by-step logging**      | Yes           | Yes — every action + state snapshot + raw completion for debugging        | Complete     |
-| Test suite                         | Yes           | Yes — smoke tests covering syntax, imports, dataset builder               | Complete     |
-| Map visualization                  | Planned       | Not built — text-based demo used instead                                  | Deferred     |
-| Multi-agent negotiation            | Wildcard idea | Not built — focused on single-agent POMDP                                 | Out of scope |
+| Action validity shaping            | Yes           | Yes — bonus for valid actions, penalty for invalid/hold                        | Complete     |
+| **TRL GRPOTrainer training**       | Yes           | Yes — vLLM colocation, seed manifest dataset, curriculum callback              | Complete     |
+| **HF Hub auto-push**               | Yes           | Yes — auto-create repo, push checkpoints every 25 batches, final model         | Complete     |
+| Unsloth-accelerated training       | Yes           | Yes — FastLanguageModel integration (fallback for 24GB GPUs)                   | Complete     |
+| Custom GRPO loop (fallback)        | Yes           | Yes — batched generation, microbatched loss                                    | Complete     |
+| Colab training notebook            | Yes           | Yes — stripped-down version for free T4/L4                                     | Complete     |
+| OpenEnv WebSocket server           | Yes           | Yes — FastAPI + openenv-core create_app                                        | Complete     |
+| HF Spaces deployment config        | Yes           | Yes — Docker-based, openenv.yaml, web UI enabled                               | Complete     |
+| Interactive terminal demo          | Yes           | Yes — greedy agent with real-time display                                      | Complete     |
+| Diagnostic tools                   | Yes           | Yes — per-episode breakdown, trajectory analysis, reward curves                | Complete     |
+| **Rich step-by-step logging**      | Yes           | Yes — every action + state snapshot + raw completion for debugging             | Complete     |
+| Test suite                         | Yes           | Yes — smoke tests covering syntax, imports, dataset builder                    | Complete     |
+| Map visualization                  | Planned       | Not built — text-based demo used instead                                       | Deferred     |
+| Multi-agent negotiation            | Wildcard idea | Not built — focused on single-agent POMDP                                      | Out of scope |
 
 ### Key Technical Decisions
 
@@ -222,6 +222,7 @@ Step 8/80
 ```
 
 **What changes:** A single pending call appears. No unit is assigned. The model must:
+
 1. Parse the call type and location
 2. Find the nearest idle unit (Unit 0 at Node 0 → Node 6, travel time ~4.2 min)
 3. Output `{"action_type":"dispatch","unit_id":0,"call_id":1}`
@@ -269,6 +270,7 @@ Step 8/80
 ```
 
 **What changes:**
+
 - **Call 1** has exceeded its deadline (17 > 12) — fatality already occurred, but the model doesn't know unless it tracks elapsed time vs deadline.
 - **Call 3** is cardiac (highest priority) with only 3 minutes left.
 - **Bridge collapse** increases travel times for all routes crossing the river.
@@ -319,6 +321,7 @@ Mutual aid remaining: 1
 ```
 
 **What the model sees at end:** All units idle, no active calls. But the episode reward (computed internally) reflects:
+
 - How many calls were resolved before deadline
 - How many fatalities occurred
 - How well units were spread across zones throughout the episode
@@ -328,14 +331,14 @@ The model gets **no per-step reward**. It only knows the final score after step 
 
 #### Summary: Information Growth Per Step
 
-| Step Range | New Information Added | Decisions Required |
-|------------|----------------------|-------------------|
-| 0-5 | Unit positions, empty city | Stage for coverage? Or hold? |
-| 5-15 | First 1-2 calls arrive | Dispatch nearest idle unit |
-| 15-30 | 3-5 calls active, radio delays begin | Track delayed units, avoid double-dispatch |
-| 30-45 | City event (bridge/heatwave), hospital divert | Reroute plans, factor traffic |
-| 45-60 | Ghost calls, mutual aid countdown | Verify vs dispatch tradeoff |
-| 60-80 | Late calls, returning units, cleanup | Final coverage, no late fatalities |
+| Step Range | New Information Added                         | Decisions Required                         |
+| ---------- | --------------------------------------------- | ------------------------------------------ |
+| 0-5        | Unit positions, empty city                    | Stage for coverage? Or hold?               |
+| 5-15       | First 1-2 calls arrive                        | Dispatch nearest idle unit                 |
+| 15-30      | 3-5 calls active, radio delays begin          | Track delayed units, avoid double-dispatch |
+| 30-45      | City event (bridge/heatwave), hospital divert | Reroute plans, factor traffic              |
+| 45-60      | Ghost calls, mutual aid countdown             | Verify vs dispatch tradeoff                |
+| 60-80      | Late calls, returning units, cleanup          | Final coverage, no late fatalities         |
 
 The prompt grows from **~400 tokens (step 0)** to **~1200-1500 tokens (step 80)** as calls, events, and unit statuses accumulate. The model must parse this growing context, filter stale radio-delayed information, and output a single valid JSON action at every step.
 
@@ -388,12 +391,12 @@ delta = self.rng.poisson(lam=lam) + 1  # +1 guarantees ≥1 step between calls
 return current_step + int(delta)
 ```
 
-| Phase | λ (Poisson) | Mean Inter-Arrival | Expected Calls per 80 Steps |
-|-------|-------------|-------------------|---------------------------|
-| Warmup | 8 | ~9 steps | ~9 |
-| Learning | 5 | ~6 steps | ~13 |
-| Advanced | 4 | ~5 steps | ~16 |
-| Expert | 3 | ~4 steps | ~20 |
+| Phase    | λ (Poisson) | Mean Inter-Arrival | Expected Calls per 80 Steps |
+| -------- | ----------- | ------------------ | --------------------------- |
+| Warmup   | 8           | ~9 steps           | ~9                          |
+| Learning | 5           | ~6 steps           | ~13                         |
+| Advanced | 4           | ~5 steps           | ~16                         |
+| Expert   | 3           | ~4 steps           | ~20                         |
 
 The timer resets after each call generation, so calls arrive independently. The `+ 1` guarantee prevents simultaneous call spawns.
 
@@ -401,11 +404,11 @@ The timer resets after each call generation, so calls arrive independently. The 
 
 Base distribution: cardiac (40%), trauma (35%), fire (25%). Three modifiers apply in sequence:
 
-| Modifier | Trigger | Effect |
-|----------|---------|--------|
-| Heatwave event | `heatwave_active > 0` | Cardiac weight ×2 (re-normalized) |
-| Adversarial bias | Weakness count ≥ 2 for a type | That type's weight ×(1 + bias) |
-| Per-episode zone bias | Always applied | `caller_bias_by_zone[zone]` uniform(0.7, 1.3) |
+| Modifier              | Trigger                       | Effect                                        |
+| --------------------- | ----------------------------- | --------------------------------------------- |
+| Heatwave event        | `heatwave_active > 0`         | Cardiac weight ×2 (re-normalized)             |
+| Adversarial bias      | Weakness count ≥ 2 for a type | That type's weight ×(1 + bias)                |
+| Per-episode zone bias | Always applied                | `caller_bias_by_zone[zone]` uniform(0.7, 1.3) |
 
 #### 3. Location Selection
 
@@ -422,17 +425,17 @@ if self.rng.random() < min(0.5, adversarial_bias[zone]):
 
 Every call has hidden fields the agent never sees and observable fields in the prompt:
 
-| Field | Value | Agent Sees? |
-|-------|-------|-------------|
-| `call_type` | cardiac/trauma/fire (hidden truth) | No |
-| `reported_type` | Same as call_type | Yes |
-| `deadline` | 8/12/15 min (base) | No |
-| `effective_deadline` | `deadline × severity_modifier` | No |
-| `severity_modifier` | uniform(0.8, 1.2) | No |
-| `panic_modifier` | `uniform(panic_range) × zone_bias` | No |
-| `caller_tone` | calm/agitated/screaming | Yes |
-| `is_false_alarm` | Boolean | No |
-| `is_ghost` | Boolean | No |
+| Field                | Value                              | Agent Sees? |
+| -------------------- | ---------------------------------- | ----------- |
+| `call_type`          | cardiac/trauma/fire (hidden truth) | No          |
+| `reported_type`      | Same as call_type                  | Yes         |
+| `deadline`           | 8/12/15 min (base)                 | No          |
+| `effective_deadline` | `deadline × severity_modifier`     | No          |
+| `severity_modifier`  | uniform(0.8, 1.2)                  | No          |
+| `panic_modifier`     | `uniform(panic_range) × zone_bias` | No          |
+| `caller_tone`        | calm/agitated/screaming            | Yes         |
+| `is_false_alarm`     | Boolean                            | No          |
+| `is_ghost`           | Boolean                            | No          |
 
 **Critical**: The agent sees `caller_tone` but NOT `panic_modifier`. A `calm` tone can mask a severe cardiac (`panic_modifier < 0.9`), while `screaming` might be a minor trauma with high panic. This is the world modeling theme in action.
 
@@ -442,23 +445,23 @@ Every call has hidden fields the agent never sees and observable fields in the p
 is_false_alarm = (not is_ghost) and (self.rng.random() < self.false_alarm_rate)
 ```
 
-| Phase | False Alarm Rate | Behavior |
-|-------|-----------------|----------|
-| Warmup | 0% | All calls are real |
-| Learning | 10% | 1 in 10 calls is fake |
-| Advanced | 15% | 1 in 6.5 calls is fake |
-| Expert | 20% | 1 in 5 calls is fake |
+| Phase    | False Alarm Rate | Behavior               |
+| -------- | ---------------- | ---------------------- |
+| Warmup   | 0%               | All calls are real     |
+| Learning | 10%              | 1 in 10 calls is fake  |
+| Advanced | 15%              | 1 in 6.5 calls is fake |
+| Expert   | 20%              | 1 in 5 calls is fake   |
 
 False alarms get `effective_deadline = ∞` and `severity_modifier = 0.5`. The optimal action is to ignore them (or `verify` then ignore). Dispatching wastes a unit but doesn't penalize directly — the opportunity cost is missing real calls.
 
 #### 6. Ghost Calls
 
-| Phase | Ghost Rate | Detection |
-|-------|-----------|-----------|
-| Warmup | 0% | — |
-| Learning | 0% | — |
-| Advanced | 5% | `verify` returns high confidence only 40% of time |
-| Expert | 10% | `verify` returns high confidence only 40% of time |
+| Phase    | Ghost Rate | Detection                                         |
+| -------- | ---------- | ------------------------------------------------- |
+| Warmup   | 0%         | —                                                 |
+| Learning | 0%         | —                                                 |
+| Advanced | 5%         | `verify` returns high confidence only 40% of time |
+| Expert   | 10%        | `verify` returns high confidence only 40% of time |
 
 Ghosts are indistinguishable from real calls in the prompt — same tones, same types. Only `verify` gives a noisy signal (40% high confidence vs 80% for real calls).
 
@@ -482,6 +485,7 @@ def record_episode(self, calls, fatalities, event_name):
 #### 8. Per-Episode Randomization
 
 Every `reset()` creates fresh randomness:
+
 - **Caller bias by zone**: Each of the 5 zones gets a random bias `uniform(0.7, 1.3)` that scales the panic modifier
 - **Severity modifiers**: Each call gets its own `uniform(0.8, 1.2)`
 - **Panic range**: Determined by difficulty phase (`(1.0, 1.0)` warmup → `(0.6, 1.5)` expert)
@@ -635,20 +639,20 @@ PPO requires a value function critic, which adds another network to train and do
 
 ### Training Configuration
 
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| Model | Qwen/Qwen3-4B | BF16, ~8GB weights |
-| Quantization | None (BF16) | A100/L40S have enough VRAM |
-| LoRA | r=16, alpha=32 | Target: q_proj, k_proj, v_proj, o_proj |
-| Batch size (episodes) | 2-8 | 2 for L40S, 8 for A100 |
-| Num generations | 2 | GRPO group size (2+ for advantage) |
-| Grad accumulation | 2 | Effective batch = 4-16 |
-| Epsilon-greedy | 25% | In reward_fn steps 1..N |
-| Max completion length | 512 tokens | JSON action + reasoning |
-| Max prompt length | 2048 tokens | Growing observation context |
-| vLLM memory | 35% | 16.8GB on L40S |
-| Learning rate | 5e-5 | Cosine schedule |
-| KL penalty (beta) | 0.01 | Prevents divergence from base |
+| Parameter             | Value          | Notes                                  |
+| --------------------- | -------------- | -------------------------------------- |
+| Model                 | Qwen/Qwen3-4B  | BF16, ~8GB weights                     |
+| Quantization          | None (BF16)    | A100/L40S have enough VRAM             |
+| LoRA                  | r=16, alpha=32 | Target: q_proj, k_proj, v_proj, o_proj |
+| Batch size (episodes) | 2-8            | 2 for L40S, 8 for A100                 |
+| Num generations       | 2              | GRPO group size (2+ for advantage)     |
+| Grad accumulation     | 2              | Effective batch = 4-16                 |
+| Epsilon-greedy        | 25%            | In reward_fn steps 1..N                |
+| Max completion length | 512 tokens     | JSON action + reasoning                |
+| Max prompt length     | 2048 tokens    | Growing observation context            |
+| vLLM memory           | 35%            | 16.8GB on L40S                         |
+| Learning rate         | 5e-5           | Cosine schedule                        |
+| KL penalty (beta)     | 0.01           | Prevents divergence from base          |
 
 ### Cold-Start Problem and Epsilon-Greedy Fix
 
@@ -667,17 +671,18 @@ This guarantees non-zero rewards (~0.30-0.50) in early batches, providing the gr
 
 ### Training Progression (Expected)
 
-| Stage | Episodes | Mean Reward | Behavior |
-|-------|----------|-------------|----------|
-| Cold start | 1-10 | ~0.00-0.15 | Mostly hold, occasional dispatch via ε-greedy |
-| Bootstrap | 10-50 | ~0.15-0.40 | Model learns dispatch format, copies ε-greedy patterns |
-| Emerging | 50-150 | ~0.40-0.60 | Discovers staging, handles caller bias |
-| Proficient | 150-300 | ~0.60-0.75 | Adapts to city events, predicts call locations |
-| Expert | 300+ | ~0.75-0.90 | Beats oracle on coverage, minimizes fatalities |
+| Stage      | Episodes | Mean Reward | Behavior                                               |
+| ---------- | -------- | ----------- | ------------------------------------------------------ |
+| Cold start | 1-10     | ~0.00-0.15  | Mostly hold, occasional dispatch via ε-greedy          |
+| Bootstrap  | 10-50    | ~0.15-0.40  | Model learns dispatch format, copies ε-greedy patterns |
+| Emerging   | 50-150   | ~0.40-0.60  | Discovers staging, handles caller bias                 |
+| Proficient | 150-300  | ~0.60-0.75  | Adapts to city events, predicts call locations         |
+| Expert     | 300+     | ~0.75-0.90  | Beats oracle on coverage, minimizes fatalities         |
 
 ### Current Status
 
 Training is actively running on HF Hub Jobs (L40S). The pipeline:
+
 1. Auto-creates HF Hub repo on first run
 2. Pushes checkpoints every 25 batches
 3. Logs `metrics.jsonl` with reward/loss per batch
@@ -698,6 +703,7 @@ DispatchR maps to **three themes simultaneously**, maximizing the innovation sco
 ### Secondary: Theme #3.1 — World Modeling (Professional Tasks)
 
 Partial observability at every level forces genuine world-model construction:
+
 - **Delayed radio updates**: Unit statuses lag 2-3 steps behind reality
 - **Hidden severity**: Caller tone (calm/agitated/screaming) is observable; true severity is not
 - **Ghost calls**: AI-generated false emergencies with noisy verification
@@ -709,6 +715,7 @@ The agent cannot succeed by pattern-matching — it must maintain a persistent b
 ### Tertiary: Theme #4 — Self-Improvement (Adaptive Curriculum)
 
 Performance-gated curriculum learning auto-escalates difficulty:
+
 - **Warmup** (3 calls, 0% false alarms) → **Expert** (12 calls, 20% false alarms, 40% event rate)
 - Escalation triggered only when mean batch reward stabilizes above 0.65
 - The environment itself gets harder as the agent improves, preventing plateauing on easy scenarios
@@ -852,6 +859,7 @@ gantt
 ```
 
 **Key milestones:**
+
 - **Day 1 (Apr 22, ~2h):** Entire environment skeleton built -- city graph, units, call generator, hospital, events, dispatcher loop, reward, adversarial designer, curriculum, OpenEnv server, tests. 47 tests passing by end of night.
 - **Day 2 (Apr 23, ~8h):** Training pipeline -- GRPO scaffold, custom loop, epsilon-greedy warmup, Unsloth integration, vLLM wiring, LoRA/PEFT, Colab notebook. Multiple iterations on prompt format and JSON parsing.
 - **Day 3 (Apr 24, ~10h):** Training hardening -- 4-bit quantization, memory leak fixes, reward signal bugs (4 critical bugs found and fixed), Unsloth pipeline rewrite to match custom loop, trajectory logging, prompt engineering.

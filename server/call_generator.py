@@ -199,4 +199,4 @@ class CallGenerator:
                         return "medium"
                     else:
                         return "low"
-        return "high"  # default if call not found
+        return "unknown"  # call not found — should not happen in normal play

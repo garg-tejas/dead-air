@@ -74,6 +74,15 @@ def format_observation(obs: Dict) -> str:
     lines.append("")
     lines.append(f"Mutual aid remaining: {obs['mutual_aid_remaining']}")
     lines.append("")
+    # Include dispatch log if the agent has used the log() action
+    dispatch_log = obs.get("dispatch_log", "")
+    if dispatch_log:
+        lines.append("## Dispatch Log")
+        # Show last 5 entries to keep prompt size bounded
+        log_entries = [ln for ln in dispatch_log.strip().split("\n") if ln.strip()]
+        for entry in log_entries[-5:]:
+            lines.append(f"- {entry}")
+        lines.append("")
     lines.append("Choose your next action.")
     return "\n".join(lines)
 
@@ -88,15 +97,10 @@ def build_chat_prompt(tokenizer, system: str, user: str) -> str:
         {"role": "user", "content": user},
     ]
     if tokenizer.chat_template is not None:
-        try:
-            return tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=True,
-            )
-        except TypeError:
-            return tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True,
+        )
     return f"{system}\n\n{user}\n\nAssistant:"
