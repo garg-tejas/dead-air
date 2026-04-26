@@ -91,6 +91,7 @@ from typing import Any
 import numpy as np
 import torch
 from datasets import Dataset
+from huggingface_hub import create_repo
 from transformers import AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer
 
@@ -659,6 +660,14 @@ def main():
         peft_config=peft_config,
     )
 
+    # ── Auto-create HF Hub repo if needed ─────────────────────────────
+    if args.hub_model_id:
+        try:
+            create_repo(args.hub_model_id, repo_type="model", exist_ok=True)
+            print(f"📦 HF Hub repo ready: https://huggingface.co/{args.hub_model_id}")
+        except Exception as e:
+            print(f"[WARN] Could not create HF repo: {e}")
+
     # ── Metrics logging + curriculum callback wiring ──────────────────
     curriculum = None
     _batch_counter = 0
@@ -710,7 +719,7 @@ def main():
         if mean_reward is not None and curriculum is not None:
             curriculum.on_batch_end(float(mean_reward))
 
-        # Periodic model checkpoint save
+        # Periodic model checkpoint save + HF Hub push
         if _batch_counter % args.save_every == 0:
             ckpt_path = os.path.join(
                 args.output_dir, f"checkpoint-{_batch_counter}"
@@ -718,6 +727,15 @@ def main():
             trainer.save_model(ckpt_path)
             tokenizer.save_pretrained(ckpt_path)
             print(f"💾 Saved checkpoint to {ckpt_path}")
+
+            if args.hub_model_id:
+                try:
+                    trainer.push_to_hub(
+                        commit_message=f"Checkpoint {_batch_counter}"
+                    )
+                    print(f"🚀 Pushed checkpoint-{_batch_counter} to HF Hub")
+                except Exception as e:
+                    print(f"[WARN] HF push failed: {e}")
 
     trainer.log = _log_with_metrics
 
@@ -733,13 +751,16 @@ def main():
     tokenizer.save_pretrained(final_path)
     print(f"\nSaved final model to {final_path}")
 
-    if args.push_to_hub and args.hub_model_id:
-        trainer.push_to_hub(
-            commit_message="Final checkpoint — training complete"
-        )
-        print(
-            f"Pushed to https://huggingface.co/{args.hub_model_id}"
-        )
+    if args.hub_model_id:
+        try:
+            trainer.push_to_hub(
+                commit_message="Final checkpoint — training complete"
+            )
+            print(
+                f"🚀 Pushed final model to https://huggingface.co/{args.hub_model_id}"
+            )
+        except Exception as e:
+            print(f"[WARN] Final HF push failed: {e}")
 
 
 if __name__ == "__main__":
