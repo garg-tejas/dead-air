@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Measure actual completion lengths from the model to pick max_completion_length.
 
-Uses vLLM for fast inference when available (no training needed).
+Uses vLLM for fast batched inference when available (no training needed).
 Falls back to standard transformers if vLLM is not installed.
 
+IMPORTANT: vLLM does NOT support BNB (bitsandbytes) quantized models well.
+Use a plain FP16/BF16 model (e.g. Qwen/Qwen3-4B) or AWQ/GPTQ with vLLM.
+
 Usage:
-    python scripts/measure_completion_lengths.py --model unsloth/Qwen3-4B-Thinking-2507-bnb-4bit --episodes 10
+    # Fast batched inference with vLLM (recommended)
     python scripts/measure_completion_lengths.py --model Qwen/Qwen3-4B --episodes 10 --use-vllm
+
+    # Fallback to transformers (single-batch, slower)
+    python scripts/measure_completion_lengths.py --model Qwen/Qwen3-4B --episodes 10
 """
 
 import sys
@@ -23,71 +29,46 @@ from server.grpo_env_wrapper import DispatchRGRPOEnv
 from server.prompt_utils import SYSTEM_PROMPT, build_chat_prompt, format_observation
 
 
-def generate_vllm(llm, tokenizer, prompt: str, max_new_tokens: int) -> str:
-    """Generate one completion using vLLM."""
-    from vllm import SamplingParams
-    sampling_params = SamplingParams(
-        max_tokens=max_new_tokens,
-        temperature=0.7,
-        top_p=0.9,
-    )
-    outputs = llm.generate([prompt], sampling_params)
-    return outputs[0].outputs[0].text
-
-
-def generate_transformers(model, tokenizer, prompt: str, max_new_tokens: int, device: str):
-    """Generate one completion using standard transformers."""
-    import torch
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(device)
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            max_length=None,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.9,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-    return tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
-
-
-def measure(
+def measure_batched(
     generate_fn,
     tokenizer,
     episodes: int = 10,
     difficulty: str = "learning",
-    max_new_tokens: int = 2048,
+    max_new_tokens: int = 512,
 ) -> tuple[List[int], List[float]]:
+    """Run episodes with batched inference across all active envs per step."""
+    envs = [DispatchRGRPOEnv(seed=42 + i, difficulty=difficulty) for i in range(episodes)]
+    for env in envs:
+        env.reset()
+
     lengths = []
     rewards = []
+    active = list(range(episodes))
 
-    for ep in range(episodes):
-        env = DispatchRGRPOEnv(seed=42 + ep, difficulty=difficulty)
-        env.reset()
-        step_count = 0
+    for step_idx in range(80):  # MAX_STEPS
+        if not active:
+            break
 
-        for _ in range(80):
-            if env._obs and env._obs.get("done"):
-                break
+        # Build one batch of all active prompts
+        prompts = []
+        for idx in active:
+            obs_text = format_observation(envs[idx]._obs)
+            prompts.append(build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text))
 
-            obs_text = format_observation(env._obs)
-            prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text)
+        # Single batched inference call for all active envs
+        completions = generate_fn(prompts, max_new_tokens)
 
-            completion = generate_fn(prompt, max_new_tokens)
+        for i, idx in enumerate(active):
+            completion = completions[i]
+            comp_ids = tokenizer(
+                completion, return_tensors="pt", add_special_tokens=False
+            ).input_ids
+            lengths.append(comp_ids.shape[1])
+            envs[idx].step(completion)
 
-            # Count completion tokens
-            comp_ids = tokenizer(completion, return_tensors="pt", add_special_tokens=False).input_ids
-            comp_len = comp_ids.shape[1]
-            lengths.append(comp_len)
+        active = [idx for idx in active if not envs[idx]._obs.get("done")]
 
-            env.step(completion)
-            step_count += 1
-
-        rewards.append(env.reward if env.reward is not None else 0.0)
-        print(f"  Episode {ep + 1}/{episodes} complete: {step_count} steps, reward={rewards[-1]:.3f}")
-
+    rewards = [env.reward if env.reward is not None else 0.0 for env in envs]
     return lengths, rewards
 
 
@@ -132,23 +113,53 @@ def print_stats(lengths: list[int], rewards: list[float]) -> int:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="unsloth/Qwen3-4B-Thinking-2507-bnb-4bit")
+    parser.add_argument(
+        "--model",
+        default="Qwen/Qwen3-4B",
+        help="Model ID. Use plain FP16/BF16 for vLLM (BNB models may not work).",
+    )
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--difficulty", default="learning")
-    parser.add_argument("--use-vllm", action="store_true", help="Use vLLM for faster inference")
+    parser.add_argument("--use-vllm", action="store_true", help="Use vLLM for faster batched inference")
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=512,
+        help="Max tokens per completion. 512 is plenty for DispatchR JSON actions.",
+    )
     args = parser.parse_args()
 
     generate_fn = None
     tokenizer = None
 
     if args.use_vllm:
+        if "bnb" in args.model.lower() or "4bit" in args.model.lower() or "8bit" in args.model.lower():
+            print(
+                "WARNING: BNB-quantized models are not well supported by vLLM.\n"
+                "         Consider using a plain FP16/BF16 model or AWQ/GPTQ variant.\n"
+                "         Falling back to standard transformers."
+            )
+            args.use_vllm = False
+
+    if args.use_vllm:
         try:
-            from vllm import LLM
+            from vllm import LLM, SamplingParams
+
             print(f"Loading model with vLLM: {args.model}")
             llm = LLM(model=args.model, dtype="bfloat16", max_model_len=4096)
             tokenizer = llm.get_tokenizer()
-            generate_fn = lambda prompt, max_tok: generate_vllm(llm, tokenizer, prompt, max_tok)
+            sampling_params = SamplingParams(
+                max_tokens=args.max_new_tokens,
+                temperature=0.7,
+                top_p=0.9,
+            )
+
+            def _generate(prompts: list, _max_tok: int) -> list[str]:
+                outputs = llm.generate(prompts, sampling_params)
+                return [out.outputs[0].text for out in outputs]
+
+            generate_fn = _generate
             print("vLLM loaded successfully.")
         except ImportError:
             print("vLLM not installed. Falling back to standard transformers.")
@@ -172,26 +183,58 @@ def main():
             tokenizer.pad_token = tokenizer.eos_token
         model.eval()
         device = next(model.parameters()).device
-        generate_fn = lambda prompt, max_tok: generate_transformers(model, tokenizer, prompt, max_tok, device)
 
-    print(f"Running {args.episodes} episodes with max_new_tokens=2048 (no truncation)...")
-    print("Progress: episode 0/{}".format(args.episodes))
+        def _generate(prompts: list, max_tok: int) -> list[str]:
+            inputs = tokenizer(
+                prompts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=2048,
+            ).to(device)
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=max_tok,
+                    max_length=None,
+                    do_sample=True,
+                    temperature=0.7,
+                    top_p=0.9,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
+            prompt_lens = inputs.input_ids.shape[1]
+            completions = []
+            for i in range(len(prompts)):
+                gen_ids = outputs[i][prompt_lens:]
+                completions.append(tokenizer.decode(gen_ids, skip_special_tokens=True))
+            return completions
+
+        generate_fn = _generate
+
+    print(f"Running {args.episodes} episodes, max_new_tokens={args.max_new_tokens}...")
     start = time.time()
-    lengths, rewards = measure(generate_fn, tokenizer, args.episodes, args.difficulty)
+    lengths, rewards = measure_batched(
+        generate_fn, tokenizer, args.episodes, args.difficulty, args.max_new_tokens
+    )
     elapsed = time.time() - start
 
     suggested = print_stats(lengths, rewards)
-    print(f"\nTotal time: {elapsed:.1f}s ({elapsed/args.episodes:.1f}s per episode)")
+    print(f"\nTotal time: {elapsed:.1f}s ({elapsed / args.episodes:.1f}s per episode)")
 
     with open("completion_lengths.json", "w") as f:
-        json.dump({
-            "lengths": lengths,
-            "rewards": rewards,
-            "suggested_max_completion_length": suggested,
-            "model": args.model,
-            "episodes": args.episodes,
-            "used_vllm": args.use_vllm,
-        }, f, indent=2)
+        json.dump(
+            {
+                "lengths": lengths,
+                "rewards": rewards,
+                "suggested_max_completion_length": suggested,
+                "model": args.model,
+                "episodes": args.episodes,
+                "used_vllm": args.use_vllm,
+            },
+            f,
+            indent=2,
+        )
     print("Saved raw data to completion_lengths.json")
 
 
