@@ -1,32 +1,38 @@
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+# Slim HF Spaces Dockerfile for DispatchR environment server.
+# Only installs runtime deps — no training libraries.
+FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
-ENV HF_HOME=/data/.cache/huggingface
+ENV PYTHONDONTWRITEBYTECODE=1
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    python3 python3-pip python-is-python3 git wget curl vim procps \
+# Install minimal system deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create user with UID 1000 (required by HF Spaces)
+# Create user (HF Spaces convention)
 RUN useradd -m -u 1000 user
-
-# Set up working directory and ensure local bin is on PATH for --user installs
-RUN mkdir -p /app && chown 1000 /app
 WORKDIR /app
 USER 1000
 ENV PATH="/home/user/.local/bin:${PATH}"
 
-# Copy and install dependencies first (for layer caching)
+# Copy and install ONLY runtime dependencies (no training libs)
 COPY --chown=user pyproject.toml .
-RUN pip3 install --no-cache-dir --user ".[train]" unsloth huggingface-hub
+RUN pip install --no-cache-dir --user \
+    "openenv-core[core]>=0.2.3" \
+    "numpy>=1.24.0" \
+    "networkx>=3.0" \
+    "pydantic>=2.0" \
+    "jmespath>=1.1.0" \
+    "fastapi>=0.110.0" \
+    "uvicorn>=0.27.0"
 
-# Copy all code
+# Copy environment code
 COPY --chown=user . .
 
-# Create output directories
-RUN mkdir -p /app/outputs /app/logs
+# Expose the HF Spaces port
+EXPOSE 7860
 
-# Keep container alive
-CMD ["python", "app.py"]
+# Run the OpenEnv FastAPI server
+CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "7860"]

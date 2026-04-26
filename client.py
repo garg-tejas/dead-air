@@ -9,8 +9,13 @@ from openenv.core.env_server.types import State
 from .models import DispatchAction, DispatchObservation
 
 
-class EmergencyDispatcherClient:
-    """Client for the DispatchR Dispatcher Environment."""
+class EmergencyDispatcherClient(EnvClient[DispatchAction, DispatchObservation, State]):
+    """Client for the DispatchR Dispatcher Environment.
+
+    Inherits ``from_hub()``, ``reset()``, ``step()``, and ``close()``
+    from :class:`EnvClient`.  Only the payload parsers need to be
+    overridden for DispatchR-specific types.
+    """
 
     def _step_payload(self, action: DispatchAction) -> Dict:
         return {
