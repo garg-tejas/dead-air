@@ -137,12 +137,11 @@ def compute_grpo_loss(
                 )
                 continue
 
-            token_lps = []
-            for j in range(c_len):
-                tok_id = full_ids_batch[i_idx, p_len + j]
-                lp = log_probs_all[i_idx, p_len + j - 1, tok_id]
-                token_lps.append(lp)
-            mb_new_log_probs.append(torch.stack(token_lps).sum())
+            # Vectorized gather: avoid Python loop over tokens
+            comp_ids = full_ids_batch[i_idx, p_len : p_len + c_len]
+            positions = torch.arange(p_len - 1, p_len + c_len - 1, device=device)
+            token_lps = log_probs_all[i_idx, positions, comp_ids]
+            mb_new_log_probs.append(token_lps.sum())
 
         mb_new_log_probs = torch.stack(mb_new_log_probs)
         mb_old_log_probs = torch.stack([

@@ -192,13 +192,11 @@ def run_episodes_batched(
                 old_log_probs.append(torch.tensor(0.0, device=device))
                 continue
 
-            token_lps = []
-            for k in range(c_len):
-                tok_id = full_ids_batch[i, p_len + k]
-                # logits[:, t, :] predicts token at position t+1
-                lp = log_probs_all[i, p_len + k - 1, tok_id]
-                token_lps.append(lp)
-            old_log_probs.append(torch.stack(token_lps).sum())
+            # Vectorized gather: avoid Python loop over tokens
+            comp_ids = full_ids_batch[i, p_len : p_len + c_len]
+            positions = torch.arange(p_len - 1, p_len + c_len - 1, device=device)
+            token_lps = log_probs_all[i, positions, comp_ids]
+            old_log_probs.append(token_lps.sum())
 
         # --- Step environments & store trajectory ---
         for i, idx in enumerate(active_indices):
@@ -236,18 +234,8 @@ def run_episodes_batched(
         # Update active list
         active = [idx for idx in active if not envs[idx]._obs.get("done")]
 
-        # Aggressive cleanup between steps
-        del (
-            inputs,
-            output_sequences,
-            model_outputs,
-            logits,
-            log_probs_all,
-            full_ids_batch,
-            attention_mask,
-            old_log_probs,
-        )
-        torch.cuda.empty_cache()
+    # Aggressive cleanup once per batch (not per step) to avoid CUDA sync stalls
+    torch.cuda.empty_cache()
 
     rewards = [env.reward if env.reward is not None else 0.0 for env in envs]
     return all_episodes, rewards
@@ -329,12 +317,11 @@ def compute_grpo_loss(
                 new_log_probs.append(torch.tensor(0.0, device=device))
                 continue
 
-            token_lps = []
-            for k in range(c_len):
-                tok_id = full_ids[j, p_len + k]
-                lp = log_probs_all[j, p_len + k - 1, tok_id]
-                token_lps.append(lp)
-            new_log_probs.append(torch.stack(token_lps).sum())
+            # Vectorized gather: avoid Python loop over tokens
+            comp_ids = full_ids[j, p_len : p_len + c_len]
+            positions = torch.arange(p_len - 1, p_len + c_len - 1, device=device)
+            token_lps = log_probs_all[j, positions, comp_ids]
+            new_log_probs.append(token_lps.sum())
 
         new_log_probs = torch.stack(new_log_probs)
         old_log_probs = torch.stack(
@@ -382,7 +369,7 @@ def main():
     parser.add_argument("--difficulty", type=str, default="learning")
     parser.add_argument("--output-dir", type=str, default="./outputs/grpo")
     parser.add_argument("--save-every", type=int, default=50)
-    parser.add_argument("--max-completion-length", type=int, default=1536)
+    parser.add_argument("--max-completion-length", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -395,7 +382,7 @@ def main():
     parser.add_argument(
         "--micro-batch-size",
         type=int,
-        default=1,
+        default=8,
         help="Steps per micro-batch during update (reduce if OOM)",
     )
     parser.add_argument(
