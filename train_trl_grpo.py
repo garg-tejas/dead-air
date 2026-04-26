@@ -123,17 +123,13 @@ def build_seed_dataset(
         if n_steps <= 1:
             continue
 
-        upper = min(79, n_steps - 1)
+        upper = min(40, n_steps - 1)
         if upper < 1:
             continue
 
         # Vectorized sampling: choose K random step indices
         k = min(steps_per_seed, upper)
-        sampled_indices = np.random.choice(
-            np.arange(1, upper + 1),
-            size=k,
-            replace=False,
-        )
+        sampled_indices = np.random.choice(np.arange(3, upper + 1), size=k, replace=False)
 
         # Replay episode once, capturing observations at sampled steps
         env = DispatchRGRPOEnv(seed=seed, difficulty=diff)
@@ -770,13 +766,37 @@ def main():
     # Monkey-patch the log method to intercept metrics
     _orig_log = trainer.log
 
+    _printed_log_keys = False
+
+    def _first_present(d: dict, keys: list[str]):
+        for k in keys:
+            if k in d and d[k] is not None:
+                return d[k]
+        return None
+
     def _log_with_metrics(logs, *_pos_args, **kw):
         _orig_log(logs, *_pos_args, **kw)
         nonlocal _batch_counter
+        nonlocal _printed_log_keys
         _batch_counter += 1
 
-        mean_reward = logs.get("reward", logs.get("train/reward", None))
-        loss = logs.get("loss", logs.get("train/loss", None))
+        # TRL/HF can emit different metric key names across versions.
+        mean_reward = _first_present(
+            logs,
+            [
+                "reward",
+                "train/reward",
+                "rewards/mean",
+                "reward_mean",
+                "train/rewards/mean",
+                "objective/reward",
+            ],
+        )
+        loss = _first_present(logs, ["loss", "train/loss"])
+
+        if not _printed_log_keys and mean_reward is None:
+            print(f"[DEBUG] trainer.log keys: {sorted(logs.keys())}")
+            _printed_log_keys = True
 
         # Print metrics
         if _batch_counter % args.log_every == 0:

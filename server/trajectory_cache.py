@@ -164,7 +164,7 @@ def sample_dataset_rows(
             continue
 
         sampled_indices = np.random.choice(
-            range(1, upper + 1),
+            range(3, upper + 1),
             size=min(n_samples_per_seed, upper),
             replace=False,
         ).tolist()
