@@ -649,10 +649,10 @@ def main():
     target_epochs = max(1, args.episodes // steps_per_epoch)
 
     requested_num_generations = args.num_generations
-    effective_num_generations = max(2, requested_num_generations)
+    effective_num_generations = max(4, requested_num_generations)
     if effective_num_generations != requested_num_generations:
         print(
-            "WARN: GRPO requires at least 2 generations per prompt. "
+            "WARN: GRPO signal quality is poor with too few generations. "
             f"Overriding --num-generations {requested_num_generations} -> {effective_num_generations}."
         )
 
@@ -662,8 +662,8 @@ def main():
         run_name=f"dispatchr-{args.difficulty}",
         # ── generation ─────────────────────────────────────────────
         max_completion_length=256,       # hardcoded: 1536 causes OOM on 48GB
-        num_generations=effective_num_generations,  # GRPO requires >=2 to compute advantages
-        generation_batch_size=8,         # 8 completions per vLLM forward pass
+        num_generations=effective_num_generations,  # keep multiple completions per prompt for stable GRPO variance
+        generation_batch_size=effective_num_generations,  # one GRPO group per vLLM pass by default
         use_vllm=not args.no_vllm,
         vllm_mode="colocate",  # vLLM shares GPU with trainer (no extra server)
         vllm_gpu_memory_utilization=vllm_mem_util,  # dynamic: 0.35 on 48GB, 0.40 on 80GB
@@ -671,7 +671,7 @@ def main():
         top_p=0.9,
         # ── training ───────────────────────────────────────────────
         num_train_epochs=target_epochs,
-        per_device_train_batch_size=8,   # 8 different seeds = real reward variance per step
+        per_device_train_batch_size=args.batch_size,  # honor CLI batch size (unique prompts per step)
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.learning_rate,
         bf16=True,  # A100 supports BF16 natively

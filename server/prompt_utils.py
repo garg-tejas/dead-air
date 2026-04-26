@@ -93,6 +93,17 @@ def format_observation(obs: Dict) -> str:
         for entry in log_entries[-5:]:
             lines.append(f"- {entry}")
         lines.append("")
+    idle_units = [
+        u["unit_id"]
+        for u in obs.get("unit_statuses", [])
+        if u.get("last_known_status") == "idle"
+    ]
+    pending_calls = [
+        c["call_id"]
+        for c in obs.get("active_calls", [])
+        if c.get("assigned_unit") is None
+    ]
+    lines.append(f"Available: units={idle_units} pending_calls={pending_calls}")
     lines.append("Choose your next action.")
     return "\n".join(lines)
 
