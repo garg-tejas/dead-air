@@ -261,12 +261,13 @@ hf jobs logs <job-id>
 
 **Hardware Options:**
 
-| Flavor | GPU | VRAM | $/hr | Best For |
-|--------|-----|------|------|----------|
-| `l4x1` | L4 | 24 GB | $0.80 | 4B model, budget runs, pilot testing |
+| Flavor       | GPU  | VRAM  | $/hr  | Best For                               |
+| ------------ | ---- | ----- | ----- | -------------------------------------- |
+| `l4x1`       | L4   | 24 GB | $0.80 | 4B model, budget runs, pilot testing   |
 | `a100-large` | A100 | 80 GB | $2.50 | 14B model, max performance, final runs |
 
 **L4 vs A100:**
+
 - L4 is **better price/performance** for 4B models (~$8-10 for 200 episodes)
 - A100 is **required** for 14B models (L4 OOMs at ~30GB loaded)
 - A100 is ~1.5–2× faster per batch but costs 3.1× more — only worth it for 14B
@@ -427,12 +428,9 @@ These metrics let judges verify that improvement is real, not just reward hackin
 
 ## Team
 
-- **Solo project**: garg-tejas
+- **Team Name**: TorchBearers
+- **Team Members**: [Harsh Vardhan](https://github.com/the-harsh-vardhan) , [Siddharth Kumar](https://github.com/S1ddharth-Kumar), [Tejas Garg](https://github.com/garg-tejas)
 - **Model**: unsloth/Qwen3-4B-Thinking-2507-bnb-4bit (4B params, thinking-enabled, pre-quantized)
 - **GPU**: Lightning AI L4 (24GB VRAM) / HF Hub Jobs
 - **Hackathon**: Meta OpenEnv Hackathon, India, April 25-26 2026
 - **Tests**: 47/47 passing
-
-## License
-
-BSD 3-Clause License. See LICENSE file for details.
