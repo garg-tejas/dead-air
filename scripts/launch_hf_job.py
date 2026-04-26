@@ -20,10 +20,10 @@ Usage:
         --episodes 500 \\
         --hub-model-id username/dispatchr-grpo
 
-    # L4 — Unsloth script (cheapest, 24GB, slower)
+    # L4 — TRL script (main training path)
     python scripts/launch_hf_job.py \\
         --flavor l4x1 \\
-        --script unsloth \\
+        --script trl \\
         --episodes 200 \\
         --hub-model-id username/dispatchr-grpo
 """
@@ -36,10 +36,10 @@ import sys
 
 # ── GPU flavors and their VRAM ─────────────────────────────────────────────
 FLAVORS = {
-    "l4x1":       {"vram_gb": 24,  "price": "$0.80/hr",  "recommended_script": "unsloth"},
-    "a10g-large": {"vram_gb": 24,  "price": "$1.50/hr",  "recommended_script": "unsloth"},
-    "l40sx1":       {"vram_gb": 48,  "price": "$1.80/hr",  "recommended_script": "grpo"},
-    "a100-large": {"vram_gb": 80,  "price": "$2.50/hr",  "recommended_script": "grpo"},
+    "l4x1":       {"vram_gb": 24,  "price": "$0.80/hr",  "recommended_script": "trl"},
+    "a10g-large": {"vram_gb": 24,  "price": "$1.50/hr",  "recommended_script": "trl"},
+    "l40sx1":       {"vram_gb": 48,  "price": "$1.80/hr",  "recommended_script": "trl"},
+    "a100-large": {"vram_gb": 80,  "price": "$2.50/hr",  "recommended_script": "trl"},
 }
 
 # ── Dependencies per script ────────────────────────────────────────────────

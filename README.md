@@ -83,8 +83,9 @@ dead-air/
 ├── README.md                       # This file
 ├── pyproject.toml                  # Package dependencies
 │
-├── train_unsloth_grpo.py           # PRIMARY: Unsloth GRPO training with live progress tracking
-├── train_grpo.py                   # FALLBACK: Manual GRPO (standard transformers)
+├── train_trl_grpo.py               # PRIMARY: TRL-native GRPO training (recommended)
+├── train_unsloth_grpo.py           # LEGACY: Unsloth GRPO training path
+├── train_grpo.py                   # LEGACY: Manual GRPO training path
 ├── eval.py                         # Greedy baseline evaluation
 ├── demo.py                         # Interactive terminal demo
 ├── diagnose.py                     # Per-episode diagnostic script
@@ -184,34 +185,33 @@ pip install unsloth transformers torch trl numpy networkx matplotlib
 
 > **Note**: `import unsloth` must happen **before** `import transformers` to enable kernel optimizations.
 
-### Primary: Unsloth GRPO Training (Local)
+### Primary: TRL GRPO Training (Local)
 
 ```bash
-python train_unsloth_grpo.py \
-  --model unsloth/Qwen3-4B-Thinking-2507-bnb-4bit \
+python train_trl_grpo.py \
+  --model Qwen/Qwen3-4B \
   --episodes 200 \
-  --batch-size 8 \
-  --max-completion-length 512 \
+  --batch-size 4 \
+  --num-generations 4 \
+  --max-completion-length 256 \
   --curriculum \
   --save-every 25 \
-  --output-dir ./outputs/unsloth_grpo
+  --output-dir ./outputs/trl_grpo
 ```
 
-**Why Unsloth?**
+**Why TRL-native (`train_trl_grpo.py`)?**
 
-- 2–5× faster than manual GRPO on L4
-- Pre-quantized `-bnb-4bit` models load in ~30s (no CPU RAM spike)
-- Thinking-enabled models generate `<think>` reasoning blocks that RL can optimize
+- Actively maintained training path in this repo
+- Random-step trajectory-cache dataset provides stronger learning signal
+- Integrated vLLM generation path for fast grouped rollouts on HF Jobs
 
 **Key flags:**
 
-- `--model unsloth/Qwen3-4B-Thinking-2507-bnb-4bit`: Pre-quantized 4B thinking model (fits in ~17GB)
-- `--model unsloth/Qwen3-14B-unsloth-bnb-4bit`: Upgrade to 14B on A100 (recommended for final runs)
+- `--model Qwen/Qwen3-4B`: Default stable model for TRL runs
+- `--num-generations 4`: Recommended minimum GRPO group size for non-zero within-group variance
 - `--curriculum`: Enable performance-gated difficulty escalation
-- `--curriculum-phases`: Custom phase sequence (default: `warmup,learning,advanced,expert`)
-- `--curriculum-min-episodes 30`: Min episodes before escalation
-- `--curriculum-escalate-threshold 0.65`: Mean reward threshold to advance
-- `--epsilon-start 1.0`: First batches are 100% greedy actions (provides learning signal)
+- `--n-seeds`: Number of cached trajectory seeds used for random-step sampling
+- `--steps-per-seed`: Number of random decision points sampled per seed
 - `--trajectory-file`: Saves every prompt/completion as JSONL for auditing
 - `--push-to-hub --hub-model-id yourname/model`: Push checkpoints to HF Hub automatically
 
@@ -220,7 +220,7 @@ python train_unsloth_grpo.py \
 The training script now includes built-in progress tracking:
 
 - **Console reports** after every batch: reward stats, moving averages, action rates, fatalities, ETA
-- **CSV log**: `outputs/unsloth_grpo/metrics.csv` with per-batch data
+- **JSONL log**: `outputs/trl_grpo/metrics.jsonl` with per-batch data
 - **Auto-generated plots** at the end:
   - `training_progress.png` — 6-panel dashboard (reward, loss, validity, actions, fatalities, epsilon/curriculum)
   - `training_curves.png` — Minimal 2-panel (reward + loss)
@@ -236,14 +236,13 @@ curl -LsSf https://hf.co/cli/install.sh | bash
 # 2. Login
 hf auth login
 
-# 3. Launch training (L4 = $0.80/hr, 24GB)
-python scripts/launch_hf_job.py --flavor l4x1 --episodes 200
+# 3. Launch training (TRL is default / main script)
+python scripts/launch_hf_job.py --flavor l40sx1 --episodes 200
 
-# Or A100 for 14B model ($2.50/hr, 80GB)
+# Or A100 for faster throughput ($2.50/hr, 80GB)
 python scripts/launch_hf_job.py \
   --flavor a100-large \
-  --episodes 200 \
-  --model unsloth/Qwen3-14B-unsloth-bnb-4bit
+  --episodes 200
 
 # 4. Watch logs stream in terminal
 #    (Ctrl+C stops watching; job keeps running)
@@ -267,11 +266,12 @@ hf jobs logs <job-id>
 
 **Budget math:** $60 credit = 75 hrs on L4 or 24 hrs on A100.
 
-### Fallback: Manual GRPO Training
+### Legacy Alternatives (Optional)
 
-If Unsloth is unavailable:
+If you specifically want older training paths:
 
 ```bash
+# Legacy manual GRPO
 python train_grpo.py \
   --model Qwen/Qwen3.5-2B \
   --episodes 200 \
@@ -281,6 +281,15 @@ python train_grpo.py \
 ```
 
 Same `--curriculum` flags supported.
+
+```bash
+# Legacy Unsloth path
+python train_unsloth_grpo.py \
+  --model unsloth/Qwen3-4B-Thinking-2507-bnb-4bit \
+  --episodes 200 \
+  --batch-size 8 \
+  --output-dir ./outputs/unsloth_grpo
+```
 
 ### Monitoring Training Progress
 
