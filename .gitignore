@@ -47,5 +47,6 @@ uv.lock
 
 *.md
 !README.md
+!STORY.md
 
 *.json
