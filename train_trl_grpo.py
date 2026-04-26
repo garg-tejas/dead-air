@@ -100,10 +100,6 @@ from server.constants import CURRICULUM_PHASES, MAX_STEPS
 from server.grpo_env_wrapper import DispatchRGRPOEnv
 from server.prompt_utils import SYSTEM_PROMPT, build_chat_prompt, format_observation
 
-# Module-level counter for deterministic seeds in rollout_func
-_rollout_counter = 0
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # 1.  DATASET BUILDER
 # ══════════════════════════════════════════════════════════════════════════════
@@ -531,128 +527,24 @@ def main():
         trajectory_path=args.trajectory_file,
     )
 
-    # ── Rollout function (multi-step via vLLM for all steps) ──────────
-    # Unlike the reward_fn approach (which only uses vLLM for step 0),
-    # rollout_func routes ALL steps through vLLM via generate_rollout_completions.
-    # This is what the kube-sre-gym hackathon winner used and is the correct
-    # pattern for multi-step environments in TRL >= 0.27.
+    # ── Architecture note ─────────────────────────────────────────────
+    # We do NOT use rollout_func.  DispatchR has 80 steps with a NEW
+    # observation each step (calls appear, units move, traffic changes).
+    # rollout_func is designed for episodes where the model generates a
+    # single long completion with tool calls interleaved.  For DispatchR
+    # that would require concatenating 80 separate generations into one
+    # tensor — the resulting log-probs would be meaningless because the
+    # model never produced them in a single forward pass.
     #
-    # IMPORTANT: generate_rollout_completions is only available in
-    # trl>=0.27 with experimental openenv support. If not available we
-    # fall back to the reward_fn approach (steps 1..N via HF generate).
-    try:
-        from trl.experimental.openenv import generate_rollout_completions
-
-        _has_openenv = True
-    except ImportError:
-        _has_openenv = False
-        print(
-            "WARN: trl.experimental.openenv not available — "
-            "falling back to reward_fn approach."
-        )
-        print(
-            "      Install trl>=0.27 for full multi-step vLLM rollout support."
-        )
-
-    def rollout_func(prompts: list, trainer) -> dict:
-        """Run full DispatchR episodes with all steps going through vLLM.
-
-        Each call processes one batch of episodes (len(prompts) == batch_size).
-        Steps 1..N use generate_rollout_completions which talks to the
-        colocated vLLM engine.
-
-        NOTE: seeds are drawn from a global counter because rollout_func
-        receives prompt strings, not the raw dataset rows.  Episode
-        variety comes from the counter, not from the dataset seeds.
-        """
-        global _rollout_counter
-        keys = ["prompt_ids", "completion_ids", "logprobs", "reward"]
-        results = {k: [] for k in keys}
-
-        for i, _prompt in enumerate(prompts):
-            seed = args.seed + _rollout_counter
-            diff = args.difficulty
-            _rollout_counter += 1
-
-            env = DispatchRGRPOEnv(seed=seed, difficulty=diff)
-            env.reset()
-
-            all_prompt_ids = []
-            all_completion_ids = []
-            all_logprobs = []
-
-            for step_idx in range(MAX_STEPS):
-                if env._obs and env._obs.get("done"):
-                    break
-
-                obs_text = format_observation(env._obs)
-                step_prompt = build_chat_prompt(
-                    tokenizer, SYSTEM_PROMPT, obs_text
-                )
-
-                # Single-step vLLM generation (batched across
-                # rollout_func calls when trainer calls with a batch)
-                if _has_openenv:
-                    step_outputs = generate_rollout_completions(
-                        trainer, [step_prompt]
-                    )
-                    out = step_outputs[0]
-                    completion_text = tokenizer.decode(
-                        out["completion_ids"], skip_special_tokens=True
-                    )
-                    all_prompt_ids.append(out["prompt_ids"])
-                    all_completion_ids.append(out["completion_ids"])
-                    all_logprobs.append(out.get("logprobs", []))
-                else:
-                    # Fallback: use trainer's underlying model directly
-                    device = next(trainer.model.parameters()).device
-                    inputs = tokenizer(
-                        step_prompt,
-                        return_tensors="pt",
-                        truncation=True,
-                        max_length=2048,
-                    ).to(device)
-                    with torch.no_grad():
-                        out_ids = trainer.model.generate(
-                            **inputs,
-                            max_new_tokens=args.max_completion_length,
-                            do_sample=True,
-                            temperature=0.7,
-                            top_p=0.9,
-                            pad_token_id=tokenizer.pad_token_id,
-                        )
-                    gen = out_ids[0, inputs.input_ids.shape[1] :]
-                    completion_text = tokenizer.decode(
-                        gen, skip_special_tokens=True
-                    )
-                    all_prompt_ids.append(inputs.input_ids[0])
-                    all_completion_ids.append(gen)
-                    all_logprobs.append([])
-
-                env.step(completion_text)
-
-            episode_reward = (
-                float(env.reward) if env.reward is not None else 0.0
-            )
-
-            # TRL expects one (prompt_ids, completion_ids) pair per sample.
-            # For multi-step we return the step-0 prompt and the concatenation
-            # of all completions so the policy is updated on the full action
-            # sequence.
-            results["prompt_ids"].append(
-                all_prompt_ids[0] if all_prompt_ids else torch.tensor([])
-            )
-            results["completion_ids"].append(
-                torch.cat(all_completion_ids)
-                if all_completion_ids
-                else torch.tensor([])
-            )
-            results["logprobs"].append(
-                all_logprobs[0] if all_logprobs else []
-            )
-            results["reward"].append(episode_reward)
-
-        return results
+    # Instead we rely on the standard GRPO flow:
+    #   1. TRL generates step-0 action via vLLM (fast, batched)
+    #   2. reward_fn receives the completion and runs steps 1..N itself
+    #      using the policy model handle TRL passes in.
+    #   3. TRL trains on step-0 with the episode-level reward.
+    #
+    # This is slightly slower for steps 1..N (HF generate instead of
+    # vLLM) but is the only correct pattern for an observation-changing
+    # multi-step env like DispatchR.
 
     # ── GRPOConfig ────────────────────────────────────────────────────
     # num_train_epochs is computed from episodes and batch_size.
@@ -743,7 +635,6 @@ def main():
         train_dataset=dataset,
         processing_class=tokenizer,
         peft_config=peft_config,
-        rollout_func=rollout_func if _has_openenv else None,
     )
 
     # ── Curriculum callback wiring ────────────────────────────────────
