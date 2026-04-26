@@ -38,8 +38,8 @@ import sys
 FLAVORS = {
     "l4x1":       {"vram_gb": 24,  "price": "$0.80/hr",  "recommended_script": "unsloth"},
     "a10g-large": {"vram_gb": 24,  "price": "$1.50/hr",  "recommended_script": "unsloth"},
-    "l40sx1":       {"vram_gb": 48,  "price": "$1.80/hr",  "recommended_script": "trl"},
-    "a100-large": {"vram_gb": 80,  "price": "$2.50/hr",  "recommended_script": "trl"},
+    "l40sx1":       {"vram_gb": 48,  "price": "$1.80/hr",  "recommended_script": "grpo"},
+    "a100-large": {"vram_gb": 80,  "price": "$2.50/hr",  "recommended_script": "grpo"},
 }
 
 # ── Dependencies per script ────────────────────────────────────────────────
@@ -70,6 +70,20 @@ DEPS_TRL = [
     "networkx",
     "huggingface-hub",
     "openenv-core[core]",
+    "wandb",              # experiment tracking
+]
+
+DEPS_GRPO = [
+    "torch>=2.3",
+    "transformers>=4.45",
+    "accelerate>=0.34",
+    "datasets>=2.20",
+    "peft>=0.12",
+    "numpy",
+    "networkx",
+    "huggingface-hub",
+    "openenv-core[core]",
+    "wandb",              # experiment tracking
 ]
 
 
@@ -101,7 +115,7 @@ def build_unsloth_cmd(args) -> str:
 
 
 def build_trl_cmd(args) -> str:
-    """Shell command for the TRL-native training script (A100)."""
+    """Shell command for the TRL-native training script (L40S/A100)."""
     train_args = [
         f"--model {args.model_trl}",
         f"--episodes {args.episodes}",
@@ -109,6 +123,9 @@ def build_trl_cmd(args) -> str:
         f"--n-seeds {args.n_seeds}",
         f"--max-completion-length {args.max_completion_length}",
         f"--grad-accum {args.grad_accum}",
+        f"--num-generations {args.num_generations}",
+        f"--cache-workers {args.cache_workers}",
+        f"--steps-per-seed {args.steps_per_seed}",
         "--output-dir /data/outputs",
         "--trajectory-file /data/outputs/trajectory.jsonl",
         "--push-to-hub",
@@ -117,9 +134,36 @@ def build_trl_cmd(args) -> str:
     if not args.no_curriculum:
         train_args.append("--curriculum")
         train_args.append(f"--curriculum-threshold {args.curriculum_threshold}")
+    if args.wandb_project:
+        train_args.append(f"--wandb-project {args.wandb_project}")
+        if args.wandb_entity:
+            train_args.append(f"--wandb-entity {args.wandb_entity}")
+        if args.wandb_run_name:
+            train_args.append(f"--wandb-run-name {args.wandb_run_name}")
+    if args.tensorboard:
+        train_args.append("--tensorboard")
 
     train_cmd = "python train_trl_grpo.py " + " ".join(train_args)
     return _wrap_pipeline(args, train_cmd, "train_trl_grpo.py")
+
+
+def build_grpo_cmd(args) -> str:
+    """Shell command for the hand-rolled GRPO script (L40S / A100)."""
+    train_args = [
+        f"--model {args.model_grpo}",
+        f"--episodes {args.episodes}",
+        f"--batch-size {args.batch_size}",
+        f"--max-completion-length {args.max_completion_length}",
+        "--output-dir /data/outputs",
+        "--trajectory-file /data/outputs/trajectory.jsonl",
+        "--push-to-hub",
+        f"--hub-model-id {args.hub_model_id}",
+    ]
+    if not args.no_curriculum:
+        train_args.append("--curriculum")
+
+    train_cmd = "python train_grpo.py " + " ".join(train_args)
+    return _wrap_pipeline(args, train_cmd, "train_grpo.py")
 
 
 def _wrap_pipeline(args, train_cmd: str, script_name: str) -> str:
@@ -127,14 +171,23 @@ def _wrap_pipeline(args, train_cmd: str, script_name: str) -> str:
     parts = [
         f"git clone {args.github_repo} /workspace",
         "cd /workspace",
-        # Copy TRL script in case it's not in the repo yet
-        "pip install -q trl>=0.15 vllm>=0.6 peft>=0.12 openenv-core[core] 2>&1 | tail -5",
+        # Install deps
+        "pip install -q trl>=0.15 vllm>=0.6 peft>=0.12 openenv-core[core] wandb 2>&1 | tail -5",
     ]
+    # Pass WANDB_API_KEY if available
+    wandb_key = os.environ.get("WANDB_API_KEY", "").strip()
+    if wandb_key and args.wandb_project:
+        parts.append(f"export WANDB_API_KEY={wandb_key}")
 
     if args.before_after:
+        model_for_inference = {
+            "trl": args.model_trl,
+            "unsloth": args.model_unsloth,
+            "grpo": args.model_grpo,
+        }[args.script]
         before_cmd = (
             f"python inference.py "
-            f"--model-path {args.model_trl if args.script == 'trl' else args.model_unsloth} "
+            f"--model-path {model_for_inference} "
             f"--max-new-tokens {args.max_completion_length} "
             "--episodes 3 --difficulty learning "
             "--output /data/outputs/before_inference.json "
@@ -189,17 +242,18 @@ def main():
     # ── Job config ────────────────────────────────────────────────────
     parser.add_argument(
         "--flavor",
-        default="a100-large",
+        default="l40sx1",
         choices=list(FLAVORS.keys()),
-        help="GPU flavor. a100-large recommended for TRL script.",
+        help="GPU flavor. l40sx1 (48GB, $1.80/hr) is best availability and sufficient for Qwen3-4B.",
     )
     parser.add_argument(
         "--script",
         default="trl",
-        choices=["trl", "unsloth"],
+        choices=["trl", "unsloth", "grpo"],
         help=(
-            "'trl' = new TRL-native script (A100, fast, no BNB). "
-            "'unsloth' = hand-rolled loop (L4, BNB quantization)."
+            "'trl' = TRL-native with trajectory cache (L40S/A100, vLLM, recommended). "
+            "'unsloth' = hand-rolled loop (L4, BNB quantization). "
+            "'grpo' = custom GRPO loop (L40S/A100, no vLLM, slower but trains all steps)."
         ),
     )
     parser.add_argument("--timeout", default="8h")
@@ -214,6 +268,24 @@ def main():
                         help="Dataset manifest size (TRL script only).")
     parser.add_argument("--max-completion-length", type=int, default=512)
     parser.add_argument(
+        "--num-generations",
+        type=int,
+        default=8,
+        help="GRPO group size. 8 is optimal for L40S 48GB with 512-token completions.",
+    )
+    parser.add_argument(
+        "--cache-workers",
+        type=int,
+        default=8,
+        help="Parallel workers for trajectory cache. Match vCPU count (8 on L40S).",
+    )
+    parser.add_argument(
+        "--steps-per-seed",
+        type=int,
+        default=7,
+        help="Random steps sampled per episode into dataset. 7 x 1000 seeds = 7000 rows.",
+    )
+    parser.add_argument(
         "--model-trl",
         default="Qwen/Qwen3-4B",
         help="Model for TRL script. Must be BF16-compatible (no BNB).",
@@ -223,10 +295,40 @@ def main():
         default="unsloth/Qwen3-4B-Thinking-2507-bnb-4bit",
         help="Model for Unsloth script.",
     )
+    parser.add_argument(
+        "--model-grpo",
+        default="Qwen/Qwen3-4B",
+        help="Model for custom GRPO script. BF16 on L40S/A100.",
+    )
     parser.add_argument("--no-curriculum",  action="store_true")
     parser.add_argument("--curriculum-threshold", type=float, default=0.65)
     parser.add_argument("--before-after",   action="store_true",
                         help="Run inference before and after training for comparison.")
+
+    # ── Experiment tracking ───────────────────────────────────────────
+    parser.add_argument(
+        "--wandb-project",
+        type=str,
+        default="dispatchr-grpo",
+        help="Weights & Biases project name. Set to '' to disable.",
+    )
+    parser.add_argument(
+        "--wandb-entity",
+        type=str,
+        default=None,
+        help="Weights & Biases entity (username or team).",
+    )
+    parser.add_argument(
+        "--wandb-run-name",
+        type=str,
+        default=None,
+        help="Custom wandb run name.",
+    )
+    parser.add_argument(
+        "--tensorboard",
+        action="store_true",
+        help="Enable TensorBoard logging.",
+    )
 
     # ── Hub config ────────────────────────────────────────────────────
     parser.add_argument(
@@ -245,6 +347,10 @@ def main():
         job_cmd = build_trl_cmd(args)
         deps    = DEPS_TRL
         model   = args.model_trl
+    elif args.script == "grpo":
+        job_cmd = build_grpo_cmd(args)
+        deps    = DEPS_GRPO
+        model   = args.model_grpo
     else:
         job_cmd = build_unsloth_cmd(args)
         deps    = DEPS_UNSLOTH

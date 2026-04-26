@@ -26,6 +26,11 @@ from server.grpo_env_wrapper import DispatchRGRPOEnv
 from server.city_graph import CityGraph
 from server.prompt_utils import SYSTEM_PROMPT, build_chat_prompt, format_observation
 
+try:
+    from huggingface_hub.utils import HfHubHTTPError
+except ImportError:
+    HfHubHTTPError = Exception
+
 _CITY_GRAPH = CityGraph()  # static singleton for greedy distance lookups
 
 
@@ -457,6 +462,22 @@ def main():
         default=50,
         help="Number of batches to decay epsilon",
     )
+    parser.add_argument(
+        "--push-to-hub",
+        action="store_true",
+        help="Push checkpoints and final model to Hugging Face Hub.",
+    )
+    parser.add_argument(
+        "--hub-model-id",
+        type=str,
+        default=None,
+        help="HF Hub model ID (e.g., username/dispatchr-grpo).",
+    )
+    parser.add_argument(
+        "--hub-private",
+        action="store_true",
+        help="Create Hub repo as private.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -540,6 +561,21 @@ def main():
     )
     device = next(model.parameters()).device
 
+    # HF Hub setup
+    if args.push_to_hub and args.hub_model_id:
+        try:
+            from huggingface_hub import HfApi
+            _hub_api = HfApi()
+            _hub_api.create_repo(
+                repo_id=args.hub_model_id,
+                repo_type="model",
+                exist_ok=True,
+                private=args.hub_private,
+            )
+            print(f"📦 HF Hub repo ready: https://huggingface.co/{args.hub_model_id}")
+        except HfHubHTTPError as _e:
+            print(f"[WARN] Could not create/verify model repo: {_e}")
+
     # Sanity check: greedy baseline
     print("\n--- Sanity Check: Greedy Baseline ---")
     from server.dispatcher_environment import DispatcherEnvironment
@@ -594,6 +630,7 @@ def main():
     # Training loop
     num_batches = max(1, args.episodes // args.batch_size)
     reward_history = []
+    loss_history = []
 
     # Curriculum state
     if args.curriculum:
@@ -608,6 +645,10 @@ def main():
         current_difficulty = args.difficulty
 
     trajectory_records = [] if args.trajectory_file else None
+
+    # Metrics logger (mirrors train_trl_grpo.py)
+    metrics_path = os.path.join(args.output_dir, "metrics.jsonl")
+    metrics_file = open(metrics_path, "a", encoding="utf-8")
 
     try:
         for batch_idx in range(num_batches):
@@ -713,6 +754,23 @@ def main():
             print(f"Batch time: {batch_time:.1f}s")
 
             reward_history.extend(rewards)
+            loss_history.append(loss)
+
+            # Log metrics
+            metrics_file.write(
+                json.dumps(
+                    {
+                        "batch": batch_idx + 1,
+                        "mean_reward": float(mean_reward),
+                        "loss": float(loss),
+                        "epsilon": float(epsilon),
+                        "difficulty": current_difficulty,
+                        "batch_time": batch_time,
+                    }
+                )
+                + "\n"
+            )
+            metrics_file.flush()
 
             # Save checkpoint
             episodes_done = (batch_idx + 1) * args.batch_size
@@ -721,7 +779,32 @@ def main():
                 os.makedirs(save_path, exist_ok=True)
                 model.save_pretrained(save_path)
                 tokenizer.save_pretrained(save_path)
+                # Save training state
+                _ts = {
+                    "batch_idx_done": batch_idx,
+                    "reward_history": [float(r) for r in reward_history],
+                    "loss_history": [float(l) for l in loss_history],
+                    "current_difficulty": current_difficulty,
+                }
+                with open(os.path.join(save_path, "training_state.json"), "w") as _tsf:
+                    json.dump(_ts, _tsf)
                 print(f"Saved checkpoint to {save_path}")
+
+                # Push to HF Hub
+                if args.push_to_hub and args.hub_model_id:
+                    try:
+                        from huggingface_hub import HfApi
+                        api = HfApi()
+                        api.upload_folder(
+                            folder_path=save_path,
+                            repo_id=args.hub_model_id,
+                            repo_type="model",
+                            private=args.hub_private,
+                            commit_message=f"Checkpoint after {episodes_done} episodes (reward={mean_reward:.3f})",
+                        )
+                        print(f"🚀 Pushed checkpoint to https://huggingface.co/{args.hub_model_id}")
+                    except HfHubHTTPError as e:
+                        print(f"[WARN] HF Hub push failed: {e}")
 
     except KeyboardInterrupt:
         print("\n\n[INTERRUPTED] Saving emergency checkpoint...")
@@ -730,18 +813,50 @@ def main():
         model.save_pretrained(interrupt_path)
         tokenizer.save_pretrained(interrupt_path)
         print(f"Saved emergency checkpoint to {interrupt_path}")
+        if args.push_to_hub and args.hub_model_id:
+            try:
+                from huggingface_hub import HfApi
+                api = HfApi()
+                api.upload_folder(
+                    folder_path=interrupt_path,
+                    repo_id=args.hub_model_id,
+                    repo_type="model",
+                    private=args.hub_private,
+                    commit_message="Emergency interrupt checkpoint",
+                )
+                print(f"🚀 Pushed emergency checkpoint to https://huggingface.co/{args.hub_model_id}")
+            except HfHubHTTPError as e:
+                print(f"[WARN] HF Hub push failed: {e}")
 
     # Final save
     final_path = os.path.join(args.output_dir, "final")
     os.makedirs(final_path, exist_ok=True)
     model.save_pretrained(final_path)
     tokenizer.save_pretrained(final_path)
+    if args.push_to_hub and args.hub_model_id:
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi()
+            api.upload_folder(
+                folder_path=final_path,
+                repo_id=args.hub_model_id,
+                repo_type="model",
+                private=args.hub_private,
+                commit_message="Final checkpoint — training complete",
+            )
+            print(f"🚀 Pushed final model to https://huggingface.co/{args.hub_model_id}")
+        except HfHubHTTPError as e:
+            print(f"[WARN] HF Hub push failed: {e}")
+
+    # Close metrics file
+    metrics_file.close()
 
     # Save metrics
     metrics = {
         "rewards": [float(r) for r in reward_history],
-        "mean": float(np.mean(reward_history)),
-        "std": float(np.std(reward_history)),
+        "losses": [float(l) for l in loss_history],
+        "mean": float(np.mean(reward_history)) if reward_history else 0.0,
+        "std": float(np.std(reward_history)) if reward_history else 0.0,
     }
     with open(os.path.join(args.output_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=2)
