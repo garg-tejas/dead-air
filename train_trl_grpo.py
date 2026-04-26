@@ -258,7 +258,7 @@ def make_reward_fn(
                 if env._obs and env._obs.get("done"):
                     break
                 action = greedy_action(env._obs)
-                env.step(action)
+                env.step(json.dumps(action))
                 # Only print first and last few continuation steps
                 if cont_step <= step_idx + 3 or cont_step >= max_steps - 3:
                     print(f"  [Step {cont_step}] GREEDY: {env._format_step_log(action)}")
