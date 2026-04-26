@@ -355,9 +355,8 @@ def compute_grpo_loss(
             ratio * step_advantages, clipped * step_advantages
         ).mean()
 
-        # Scale so gradients sum correctly across all steps
-        scaled_loss = batch_loss / max(1, total_steps)
-        scaled_loss.backward()
+        # GRPO: per-step loss already averaged within batch; no extra scaling needed
+        batch_loss.backward()
 
         loss_sum += batch_loss.item()
 

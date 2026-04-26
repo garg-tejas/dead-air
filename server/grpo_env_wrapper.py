@@ -43,8 +43,7 @@ class DispatchRGRPOEnv:
         diff = kwargs.get("difficulty", self._difficulty)
         # Apply seed BEFORE reset so the episode is generated with the correct RNG
         if seed is not None:
-            import numpy as np
-            self._env.rng = np.random.default_rng(seed)
+            self._env.reseed(seed)
         self._obs = self._env.reset(difficulty=diff)
         self._episode_reward = None
         self._events_log.clear()

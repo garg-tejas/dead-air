@@ -57,6 +57,7 @@ class Unit:
         self.target_node: Optional[int] = None
         self.path_remaining: List[int] = []
         self.time_on_scene: int = 0
+        self.time_returning: int = 0
         self.total_travel_time: int = 0
         self.total_distance: int = 0
         self.breakdown_timer: int = 0
@@ -74,6 +75,7 @@ class Unit:
             "target_node": self.target_node,
             "path_remaining": self.path_remaining.copy(),
             "time_on_scene": self.time_on_scene,
+            "time_returning": self.time_returning,
             "total_travel_time": self.total_travel_time,
             "total_distance": self.total_distance,
             "breakdown_timer": self.breakdown_timer,
@@ -93,6 +95,7 @@ class Unit:
         self.target_node = target_node
         self.path_remaining = path[1:] if len(path) > 1 else []
         self.time_on_scene = 0
+        self.time_returning = 0
 
     def reroute(self, new_call_id: int, target_node: int, path: List[int], call_type: str = "trauma") -> None:
         """Reroute unit to a new call."""
@@ -166,12 +169,19 @@ class Unit:
             scene_time = 5 if self.current_call_type == "fire" else 3
             if self.time_on_scene >= scene_time:
                 self.status = "returning"
+                self.time_returning = 0
                 events.append(f"Unit {self.unit_id} cleared call {self.current_call}")
-                # For simplicity, returning units go idle immediately (transport omitted in basic)
+
+        elif self.status == "returning":
+            self.time_returning += 1
+            # Transport back to base/station: 2 steps for simplicity
+            if self.time_returning >= 2:
                 self.status = "idle"
                 self.current_call = None
                 self.current_call_type = None
                 self.target_node = None
+                self.time_returning = 0
+                events.append(f"Unit {self.unit_id} returned to base and is idle")
 
         return events
 

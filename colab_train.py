@@ -47,98 +47,15 @@ except ImportError:
 
 
 # ------------------------------------------------------------------
-# 2.  Action parser (same as grpo_env_wrapper)
+# 2.  Re-use parser & formatter from repo (single source of truth)
 # ------------------------------------------------------------------
-import re
+from server.prompt_utils import format_observation as format_prompt
+
+_parse_action = DispatchRGRPOEnv._parse_action
 
 def parse_action(text: str) -> Dict:
-    """Parse completion text into action dict."""
-    text = text.strip()
-    if not text:
-        return {"action_type": "hold"}
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    action_line = lines[-1] if lines else text.strip()
-    lower = action_line.lower()
-
-    m = re.match(r"dispatch\s*\(\s*unit_id\s*=\s*(\d+)\s*,\s*call_id\s*=\s*(\d+)\s*\)", lower)
-    if m:
-        return {"action_type": "dispatch", "unit_id": int(m.group(1)), "call_id": int(m.group(2))}
-
-    m = re.match(r"reroute\s*\(\s*unit_id\s*=\s*(\d+)\s*,\s*call_id\s*=\s*(\d+)\s*\)", lower)
-    if m:
-        return {"action_type": "reroute", "unit_id": int(m.group(1)), "call_id": int(m.group(2))}
-
-    m = re.match(r"stage\s*\(\s*unit_id\s*=\s*(\d+)\s*,\s*location_node\s*=\s*(\d+)\s*\)", lower)
-    if m:
-        return {"action_type": "stage", "unit_id": int(m.group(1)), "location_node": int(m.group(2))}
-
-    m = re.match(r"divert\s*\(\s*unit_id\s*=\s*(\d+)\s*,\s*hospital_id\s*=\s*(\d+)\s*\)", lower)
-    if m:
-        return {"action_type": "divert", "unit_id": int(m.group(1)), "hospital_id": int(m.group(2))}
-
-    m = re.match(r"verify\s*\(\s*call_id\s*=\s*(\d+)\s*\)", lower)
-    if m:
-        return {"action_type": "verify", "call_id": int(m.group(1))}
-
-    m = re.match(r'log\s*\(\s*note\s*=\s*"([^"]*)"\s*\)', lower)
-    if m:
-        return {"action_type": "log", "note": m.group(1)}
-
-    if lower.startswith("hold") or lower.startswith("wait"):
-        return {"action_type": "hold"}
-
-    if lower.startswith("request_mutual_aid") or lower.startswith("mutual_aid"):
-        return {"action_type": "request_mutual_aid"}
-
-    return {"action_type": "hold"}
-
-
-# ------------------------------------------------------------------
-# 3.  Prompt formatter (same as grpo_env_wrapper)
-# ------------------------------------------------------------------
-def format_prompt(obs: Dict) -> str:
-    """Format observation into a prompt for the LLM."""
-    lines = [
-        "# Emergency Dispatch Commander",
-        f"Step {obs['step_number']}/{obs['max_steps']}",
-        "",
-        "## Units",
-    ]
-    for u in obs.get("unit_statuses", []):
-        call_info = f" -> Call {u['current_call']}" if u.get("current_call") else ""
-        lines.append(
-            f"- Unit {u['unit_id']}: {u['last_known_status']} at Node {u['last_known_location']}{call_info}"
-        )
-    lines.append("")
-    lines.append("## Active Calls")
-    for c in obs.get("active_calls", []):
-        assigned = f" (Unit {c['assigned_unit']})" if c.get("assigned_unit") else ""
-        lines.append(
-            f"- Call {c['call_id']}: {c['reported_type']} at Node {c['location']} ({c['caller_tone']}) elapsed={c['time_elapsed']}min{assigned}"
-        )
-    lines.append("")
-    lines.append("## Traffic & Hospitals")
-    for alert in obs.get("traffic_alerts", []):
-        lines.append(f"- {alert}")
-    for h in obs.get("hospital_statuses", []):
-        lines.append(f"- Hospital {h['hospital_id']}: {h['reported_status']}")
-    lines.append("")
-    lines.append(f"Mutual aid remaining: {obs['mutual_aid_remaining']}")
-    lines.append("")
-    lines.append(
-        "AVAILABLE ACTIONS:\n"
-        "dispatch(unit_id=<int>, call_id=<int>)\n"
-        "reroute(unit_id=<int>, call_id=<int>)\n"
-        "stage(unit_id=<int>, location_node=<int>)\n"
-        "divert(unit_id=<int>, hospital_id=<int>)\n"
-        "verify(call_id=<int>)\n"
-        "request_mutual_aid()\n"
-        "log(note=\"<text>\")\n"
-        "hold()\n\n"
-        "Think step by step about which calls are most urgent and which units are closest. "
-        "Then output the action on the LAST line and ONLY the action. No markdown, no quotes."
-    )
-    return "\n".join(lines)
+    """Parse completion text into action dict (delegates to shared parser)."""
+    return _parse_action(text)
 
 
 # ------------------------------------------------------------------
@@ -165,11 +82,12 @@ def load_model(model_name: str, use_unsloth: bool = True):
         print("[LOAD] LoRA adapters added")
     else:
         print(f"[LOAD] Loading {model_name} via standard Transformers...")
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
             device_map="auto",
+            trust_remote_code=True,
         )
 
     if tokenizer.pad_token is None:

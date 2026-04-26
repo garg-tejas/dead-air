@@ -1,5 +1,6 @@
 """Dispatcher environment: core reset/step loop for DispatchR."""
 
+import re
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -65,6 +66,15 @@ class DispatcherEnvironment(Environment):
         self._call_first_dispatch_step: Dict[int, int] = {}
 
         self._state = State(episode_id=str(uuid4()), step_count=0)
+
+    def reseed(self, seed: int) -> None:
+        """Propagate a new RNG seed to all sub-components for deterministic replay."""
+        self.rng = np.random.default_rng(seed)
+        self.call_generator.rng = self.rng
+        self.hospital_model.rng = self.rng
+        self.event_scheduler.rng = self.rng
+        self.radio_buffer.rng = self.rng
+        self.adversarial_designer.rng = self.rng
 
     def reset(self, difficulty: str = "warmup") -> Dict[str, Any]:
         """Reset environment for a new episode."""
@@ -169,26 +179,20 @@ class DispatcherEnvironment(Environment):
             unit_events = unit.tick(self.city_graph, self.rng)
             events.extend(unit_events)
             # Track call arrivals and resolve calls when units clear them
+            _ARRIVED_RE = re.compile(r"arrived at call (\d+)")
+            _CLEARED_RE = re.compile(r"cleared call (\d+)")
             for evt in unit_events:
-                if "arrived at call" in evt:
-                    parts = evt.split()
-                    if len(parts) >= 4:
-                        try:
-                            call_id = int(parts[-1])
-                            for c in self.call_generator.active_calls:
-                                if c["call_id"] == call_id:
-                                    c["time_arrived"] = self.step_count
-                                    break
-                        except ValueError:
-                            pass
-                if "cleared call" in evt:
-                    parts = evt.split()
-                    if len(parts) >= 4:
-                        try:
-                            call_id = int(parts[-1])
-                            self.call_generator.resolve_call(call_id, self.step_count)
-                        except ValueError:
-                            pass
+                m = _ARRIVED_RE.search(evt)
+                if m:
+                    call_id = int(m.group(1))
+                    for c in self.call_generator.active_calls:
+                        if c["call_id"] == call_id:
+                            c["time_arrived"] = self.step_count
+                            break
+                m = _CLEARED_RE.search(evt)
+                if m:
+                    call_id = int(m.group(1))
+                    self.call_generator.resolve_call(call_id, self.step_count)
             # Submit status to radio buffer
             self.radio_buffer.submit(self.step_count, unit.get_observable_status())
 
@@ -374,7 +378,6 @@ class DispatcherEnvironment(Environment):
                         "location": 0,  # starts at downtown
                         "speed": 1.0,
                         "reliability": 0.90,
-                        "call_type": "trauma",  # default until dispatched
                     },
                 })
                 events.append(f"Mutual aid requested. External Unit {aid_unit_id} arriving in 6 steps.")

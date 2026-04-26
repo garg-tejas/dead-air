@@ -88,7 +88,7 @@ def build_chat_prompt(tokenizer, system: str, user: str) -> str:
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
-                chat_template_kwargs={"enable_thinking": True},
+                enable_thinking=True,
             )
         except TypeError:
             return tokenizer.apply_chat_template(
