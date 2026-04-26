@@ -43,7 +43,8 @@ SYSTEM_PROMPT = (
     '{"action_type":"divert","unit_id":0,"hospital_id":1}\n'
     '{"action_type":"request_mutual_aid"}\n'
     '{"action_type":"hold"}\n\n'
-    "OUTPUT FORMAT: End with exactly one JSON action on its own final line. No markdown, no text after JSON."
+    "OUTPUT FORMAT: Think briefly (1-2 sentences max), then output exactly one JSON action.\n"
+    'Your response must end with this JSON on the final line: {"action_type": "'
 )
 
 
@@ -105,11 +106,11 @@ def build_chat_prompt(tokenizer, system: str, user: str) -> str:
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
-    if tokenizer.chat_template is not None:
-        return tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=True,
-        )
+        if tokenizer.chat_template is not None:
+            return tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
     return f"{system}\n\n{user}\n\nAssistant:"

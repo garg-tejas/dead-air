@@ -253,6 +253,17 @@ def make_reward_fn(
             env.step(completion)
             print(f"  [Step {step_idx}] MODEL: {env._format_step_log(parsed, completion)}")
 
+            # ── Hold penalty: punish holding when dispatch was possible ─
+            hold_penalty = 0.0
+            if parsed.get("action_type") == "hold":
+                obs_after = env._obs or {}
+                active = obs_after.get("active_calls", [])
+                units = obs_after.get("unit_statuses", [])
+                has_pending = any(c.get("assigned_unit") is None for c in active)
+                has_idle = any(u.get("last_known_status") == "idle" for u in units)
+                if has_pending and has_idle:
+                    hold_penalty = -0.15
+
             # ── Continue to episode end with greedy reference ─────────
             for cont_step in range(step_idx + 1, max_steps):
                 if env._obs and env._obs.get("done"):
@@ -265,7 +276,7 @@ def make_reward_fn(
                 elif cont_step == step_idx + 4:
                     print(f"  ... ({max_steps - step_idx - 8} greedy steps omitted) ...")
 
-            episode_reward = env.reward if env.reward is not None else 0.0
+            episode_reward = (env.reward if env.reward is not None else 0.0) + hold_penalty
             rewards.append(float(episode_reward))
 
             print(
@@ -642,9 +653,9 @@ def main():
         output_dir=args.output_dir,
         run_name=f"dispatchr-{args.difficulty}",
         # ── generation ─────────────────────────────────────────────
-        max_completion_length=args.max_completion_length,
-        num_generations=args.num_generations,  # GRPO group size (8 optimal for L40S 48GB)
-        generation_batch_size=args.batch_size,  # completions vLLM generates per fwd pass
+        max_completion_length=256,       # hardcoded: 1536 causes OOM on 48GB
+        num_generations=1,               # 1 generation per prompt — reward variance comes from different seeds
+        generation_batch_size=8,         # 8 completions per vLLM forward pass
         use_vllm=not args.no_vllm,
         vllm_mode="colocate",  # vLLM shares GPU with trainer (no extra server)
         vllm_gpu_memory_utilization=vllm_mem_util,  # dynamic: 0.35 on 48GB, 0.40 on 80GB
@@ -652,7 +663,7 @@ def main():
         top_p=0.9,
         # ── training ───────────────────────────────────────────────
         num_train_epochs=target_epochs,
-        per_device_train_batch_size=args.batch_size,
+        per_device_train_batch_size=8,   # 8 different seeds = real reward variance per step
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.learning_rate,
         bf16=True,  # A100 supports BF16 natively
