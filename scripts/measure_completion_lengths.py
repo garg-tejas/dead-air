@@ -203,10 +203,10 @@ def main():
                     pad_token_id=tokenizer.pad_token_id,
                     eos_token_id=tokenizer.eos_token_id,
                 )
-            prompt_lens = inputs.input_ids.shape[1]
+            prompt_lens = inputs.attention_mask.sum(dim=1).tolist()
             completions = []
             for i in range(len(prompts)):
-                gen_ids = outputs[i][prompt_lens:]
+                gen_ids = outputs[i][prompt_lens[i]:]
                 completions.append(tokenizer.decode(gen_ids, skip_special_tokens=True))
             return completions
 

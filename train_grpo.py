@@ -239,6 +239,18 @@ def run_episodes_batched(
         # Update active list
         active = [idx for idx in active if not envs[idx]._obs.get("done")]
 
+        # Free large per-step tensors (but keep empty_cache outside the loop)
+        del (
+            inputs,
+            output_sequences,
+            model_outputs,
+            logits,
+            log_probs_all,
+            full_ids_batch,
+            attention_mask,
+            old_log_probs,
+        )
+
     # Aggressive cleanup once per batch (not per step) to avoid CUDA sync stalls
     torch.cuda.empty_cache()
 

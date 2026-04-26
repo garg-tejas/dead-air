@@ -53,9 +53,10 @@ def format_observation(obs: Dict) -> str:
         for c in active_calls:
             assigned = f" (Unit {c['assigned_unit']})" if c.get("assigned_unit") else ""
             deadline = DEADLINES.get(c['reported_type'], '?')
+            deadline_str = "none" if deadline == float("inf") else f"{deadline}min"
             lines.append(
                 f"- Call {c['call_id']}: {c['reported_type']} at Node {c['location']} "
-                f"({c['caller_tone']}) elapsed={c['time_elapsed']}min deadline={deadline}min{assigned}"
+                f"({c['caller_tone']}) elapsed={c['time_elapsed']}min deadline={deadline_str}{assigned}"
             )
     else:
         lines.append("(none)")
