@@ -28,6 +28,12 @@ from typing import Dict, List
 import numpy as np
 from transformers import AutoTokenizer
 
+try:
+    from vllm import LLM, SamplingParams
+except ImportError:
+    LLM = None
+    SamplingParams = None
+
 from server.constants import MAX_STEPS
 from server.grpo_env_wrapper import DispatchRGRPOEnv
 from server.prompt_utils import SYSTEM_PROMPT, build_chat_prompt, format_observation
@@ -51,6 +57,12 @@ def run_baseline_batched(
                      "verify": 0, "divert": 0, "request_mutual_aid": 0, "log": 0}
     episode_details = []
     total_actions = 0
+
+    sampling_params = SamplingParams(
+        max_tokens=max_completion_length,
+        temperature=0.7,
+        top_p=0.9,
+    )
 
     num_batches = (episodes + batch_size - 1) // batch_size
 
@@ -76,31 +88,17 @@ def run_baseline_batched(
         while active and step_idx < MAX_STEPS:
             # Collect prompts from active envs
             prompts = []
-            active_indices = []
             for idx in active:
-                if envs[idx]._obs and envs[idx]._obs.get("done"):
-                    continue
                 obs_text = format_observation(envs[idx]._obs)
                 prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text)
                 prompts.append(prompt)
-                active_indices.append(idx)
-
-            if not prompts:
-                break
 
             # Batched generation via vLLM
-            outputs = llm.generate(
-                prompts,
-                sampling_params={
-                    "max_tokens": max_completion_length,
-                    "temperature": 0.7,
-                    "top_p": 0.9,
-                }
-            )
+            outputs = llm.generate(prompts, sampling_params)
 
-            # Step each env
+            # Step each env and update active list
             new_active = []
-            for i, idx in enumerate(active_indices):
+            for i, idx in enumerate(active):
                 completion = outputs[i].outputs[0].text
                 parsed = envs[idx]._parse_action(completion)
                 envs[idx].step(completion)
@@ -177,6 +175,10 @@ def main():
                         help="vLLM GPU memory fraction (0.9 for inference-only)")
     args = parser.parse_args()
 
+    if LLM is None or SamplingParams is None:
+        print("[ERROR] vLLM not installed. Install: pip install vllm")
+        return
+
     print("=" * 60)
     print("DispatchR Baseline Evaluation (vLLM)")
     print(f"  Model: {args.model}")
@@ -192,12 +194,6 @@ def main():
 
     # Load vLLM
     print("\nLoading vLLM...")
-    try:
-        from vllm import LLM, SamplingParams
-    except ImportError:
-        print("[ERROR] vLLM not installed. Install: pip install vllm")
-        return
-
     llm = LLM(
         model=args.model,
         dtype="bfloat16",
