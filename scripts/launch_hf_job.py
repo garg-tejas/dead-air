@@ -64,7 +64,7 @@ DEPS_TRL = [
     "accelerate>=0.34",
     "datasets>=2.20",
     "trl>=0.15",          # GRPOTrainer with use_vllm support
-    "vllm>=0.6",          # fast rollout generation
+    "vllm>=0.11,<0.19",   # TRL currently supports vLLM 0.11.x to 0.18.x
     "peft>=0.12",
     "numpy",
     "networkx",
@@ -172,7 +172,7 @@ def _wrap_pipeline(args, train_cmd: str, script_name: str) -> str:
         f"git clone {args.github_repo} /workspace",
         "cd /workspace",
         # Install deps
-        "pip install -q trl>=0.15 vllm>=0.6 peft>=0.12 openenv-core[core] wandb 2>&1 | tail -5",
+        "pip install -q 'trl>=0.15' 'vllm>=0.11,<0.19' 'peft>=0.12' 'openenv-core[core]' wandb 2>&1 | tail -5",
     ]
     # Pass WANDB_API_KEY if available
     wandb_key = os.environ.get("WANDB_API_KEY", "").strip()
