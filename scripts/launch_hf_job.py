@@ -2,18 +2,25 @@
 """Launch DispatchR GRPO training on Hugging Face Jobs.
 
 Supports both the hand-rolled Unsloth script (L4) and the new
-TRL-native script (A100).
+TRL-native script (A100 / L40S).
 
 Usage:
-    # A100 Large — TRL script (recommended, fast)
+    # L40S — TRL script (best availability, 48GB, fast)
     export HF_TOKEN=hf_...
+    python scripts/launch_hf_job.py \\
+        --flavor l40s \\
+        --script trl \\
+        --episodes 500 \\
+        --hub-model-id username/dispatchr-grpo
+
+    # A100 Large — TRL script (fastest, 80GB, often queued)
     python scripts/launch_hf_job.py \\
         --flavor a100-large \\
         --script trl \\
         --episodes 500 \\
         --hub-model-id username/dispatchr-grpo
 
-    # L4 — Unsloth script (cheaper, slower)
+    # L4 — Unsloth script (cheapest, 24GB, slower)
     python scripts/launch_hf_job.py \\
         --flavor l4x1 \\
         --script unsloth \\
@@ -31,6 +38,7 @@ import sys
 FLAVORS = {
     "l4x1":       {"vram_gb": 24,  "price": "$0.80/hr",  "recommended_script": "unsloth"},
     "a10g-large": {"vram_gb": 24,  "price": "$1.50/hr",  "recommended_script": "unsloth"},
+    "l40s":       {"vram_gb": 48,  "price": "$1.80/hr",  "recommended_script": "trl"},
     "a100-large": {"vram_gb": 80,  "price": "$2.50/hr",  "recommended_script": "trl"},
 }
 

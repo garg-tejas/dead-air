@@ -476,15 +476,20 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # ── A100 check ────────────────────────────────────────────────────
+    # ── GPU check + dynamic vLLM memory split ────────────────────────
+    vllm_mem_util = 0.4  # default for A100 80GB
     if torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0)
         vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
         print(f"GPU: {gpu_name} ({vram_gb:.0f} GB)")
-        if "A100" not in gpu_name and not args.no_vllm:
+        if vram_gb < 70:
+            # L40S (48GB) or smaller — give vLLM more room since model is smaller
+            vllm_mem_util = 0.55
+            print(f"  Detected mid-range GPU — vLLM memory util = {vllm_mem_util}")
+        if vram_gb < 30 and not args.no_vllm:
             print(
-                "WARN: vLLM is optimised for A100/H100. On T4/L4 consider "
-                "--no-vllm or BNB quantization."
+                "WARN: <30GB VRAM detected. vLLM colocate may OOM. "
+                "Consider --no-vllm or a larger GPU."
             )
     else:
         print("No CUDA GPU found — training on CPU (very slow).")
@@ -667,7 +672,7 @@ def main():
         generation_batch_size=args.batch_size,  # completions vLLM generates per fwd pass
         use_vllm=not args.no_vllm,
         vllm_mode="colocate",  # vLLM shares GPU with trainer (no extra server)
-        vllm_gpu_memory_utilization=0.4,  # ~32GB for vLLM, ~48GB for training on A100 80GB
+        vllm_gpu_memory_utilization=vllm_mem_util,  # dynamic: 0.55 on 48GB, 0.4 on 80GB
         vllm_max_model_len=4096,  # prompt + completion context window
         temperature=0.7,
         top_p=0.9,
