@@ -97,20 +97,17 @@ def format_observation(obs: Dict) -> str:
     return "\n".join(lines)
 
 
-def build_chat_prompt(tokenizer, system: str, user: str) -> str:
-    """Build a chat-formatted prompt using the tokenizer's chat template.
-
-    Enables thinking mode for Qwen 3/3.5 models.
-    """
+def build_chat_prompt(tokenizer, system: str, user: str, enable_thinking: bool = False) -> str:
+    """Build a chat-formatted prompt using the tokenizer's chat template."""
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
-        if tokenizer.chat_template is not None:
-            return tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=False,
-            )
+    if tokenizer.chat_template is not None:
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=enable_thinking,
+        )
     return f"{system}\n\n{user}\n\nAssistant:"

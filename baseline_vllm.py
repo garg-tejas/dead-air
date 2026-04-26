@@ -90,7 +90,7 @@ def run_baseline_batched(
             prompts = []
             for idx in active:
                 obs_text = format_observation(envs[idx]._obs)
-                prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text)
+                prompt = build_chat_prompt(tokenizer, SYSTEM_PROMPT, obs_text, enable_thinking=False)
                 prompts.append(prompt)
 
             # Batched generation via vLLM
@@ -138,6 +138,7 @@ def run_baseline_batched(
     # Compute stats
     rewards_arr = np.array(rewards)
     action_dist = {k: v / max(1, total_actions) for k, v in action_counts.items()}
+    total_parse_failures = sum(e["parse_failures"] for e in episode_details)
 
     return {
         "config": {
@@ -155,6 +156,9 @@ def run_baseline_batched(
             "max_reward": float(rewards_arr.max()),
             "median_reward": float(np.median(rewards_arr)),
             "total_actions": total_actions,
+            "total_parse_failures": total_parse_failures,
+            "parse_failure_rate": total_parse_failures / max(1, total_actions),
+            "mean_parse_failures_per_episode": total_parse_failures / max(1, episodes),
         },
         "action_distribution": action_dist,
         "episodes": episode_details,
@@ -167,7 +171,7 @@ def main():
     parser.add_argument("--episodes", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=8,
                         help="Episodes to run in parallel")
-    parser.add_argument("--max-completion-length", type=int, default=1536)
+    parser.add_argument("--max-completion-length", type=int, default=256)
     parser.add_argument("--difficulty", default="learning")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", default="baseline_results.json")
