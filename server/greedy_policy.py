@@ -6,6 +6,7 @@ Provides a fast, deterministic heuristic dispatcher that can be used as:
 - An exploration fallback during training
 """
 
+import json
 from typing import Any, Dict, List, Optional
 
 from .city_graph import CityGraph
@@ -92,7 +93,7 @@ def run_greedy_episode(env_ref, max_steps: int = 80) -> List[Dict[str, Any]]:
             break
 
         action = greedy_action(obs)
-        events_text = env_ref.step(action)
+        events_text = env_ref.step(json.dumps(action))
 
         trajectory.append(
             {

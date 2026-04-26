@@ -123,20 +123,23 @@ class DispatchRGRPOEnv:
             f"{evt_str}{raw}"
         )
 
-    def step(self, action_text: str) -> str:
-        """Execute one environment step from a raw text completion.
+    def step(self, action_text) -> str:
+        """Execute one environment step from a raw text completion or action dict.
 
-        TRL's ``environment_factory`` may pass the model's completion text
-        directly to ``step()`` when tool-call parsing fails.  We parse the
-        text into an action dict and forward it to the underlying env.
+        Accepts either a raw completion string (from the LLM) or a pre-parsed
+        action dict. This defensively handles both input types so callers don't
+        need to remember which format to use.
 
         Args:
-            action_text: Raw completion string from the LLM.
+            action_text: Raw completion string from the LLM, or an action dict.
 
         Returns:
             Event summary string.
         """
-        action = self._parse_action(action_text)
+        if isinstance(action_text, dict):
+            action = action_text
+        else:
+            action = self._parse_action(action_text)
         return self._step(action)
 
     def _parse_action(self, text: str) -> Dict[str, Any]:
