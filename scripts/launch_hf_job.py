@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
-"""Launch DispatchR GRPO training on Hugging Face Hub Jobs.
+"""Launch DispatchR GRPO training on Hugging Face Jobs.
 
-Usage (PowerShell):
-    $Env:HF_TOKEN = "hf_your_token"
-    python scripts/launch_hf_job.py --flavor l4x1 --episodes 200
+Supports both the hand-rolled Unsloth script (L4) and the new
+TRL-native script (A100).
 
-Prerequisites:
-    1. Install HF CLI: curl -LsSf https://hf.co/cli/install.sh | bash
-    2. Login: hf auth login
-    3. Have HF credits: https://huggingface.co/pricing
+Usage:
+    # A100 Large — TRL script (recommended, fast)
+    export HF_TOKEN=hf_...
+    python scripts/launch_hf_job.py \\
+        --flavor a100-large \\
+        --script trl \\
+        --episodes 500 \\
+        --hub-model-id username/dispatchr-grpo
+
+    # L4 — Unsloth script (cheaper, slower)
+    python scripts/launch_hf_job.py \\
+        --flavor l4x1 \\
+        --script unsloth \\
+        --episodes 200 \\
+        --hub-model-id username/dispatchr-grpo
 """
 
 import argparse
@@ -17,40 +27,56 @@ import subprocess
 import sys
 
 
-def run_command(cmd: list[str]) -> None:
-    """Run a shell command, streaming output, then exit with its return code."""
-    print(f"Running: {' '.join(cmd)}")
-    print("")
-    result = subprocess.run(cmd)
-    sys.exit(result.returncode)
+# ── GPU flavors and their VRAM ─────────────────────────────────────────────
+FLAVORS = {
+    "l4x1":       {"vram_gb": 24,  "price": "$0.80/hr",  "recommended_script": "unsloth"},
+    "a10g-large": {"vram_gb": 24,  "price": "$1.50/hr",  "recommended_script": "unsloth"},
+    "a100-large": {"vram_gb": 80,  "price": "$2.50/hr",  "recommended_script": "trl"},
+}
+
+# ── Dependencies per script ────────────────────────────────────────────────
+DEPS_UNSLOTH = [
+    "unsloth",
+    "transformers",
+    "accelerate",
+    "datasets",
+    "trl",
+    "numpy",
+    "networkx",
+    "matplotlib",
+    "huggingface-hub",
+    "jmespath",
+    "openenv-core[core]",
+    "peft",
+]
+
+DEPS_TRL = [
+    "torch>=2.3",
+    "transformers>=4.45",
+    "accelerate>=0.34",
+    "datasets>=2.20",
+    "trl>=0.15",          # GRPOTrainer with use_vllm support
+    "vllm>=0.6",          # fast rollout generation
+    "peft>=0.12",
+    "numpy",
+    "networkx",
+    "huggingface-hub",
+    "openenv-core[core]",
+]
 
 
 def get_hf_token() -> str:
-    """Read HF_TOKEN from environment variable only."""
     token = os.environ.get("HF_TOKEN", "").strip()
     if not token:
-        print("ERROR: HF_TOKEN not found. Set it as an environment variable:")
-        print("")
-        print("  PowerShell:")
-        print("    $Env:HF_TOKEN = 'hf_your_token'")
-        print("")
-        print("  Bash:")
-        print("    export HF_TOKEN=hf_your_token")
-        print("")
-        print("  Windows CMD:")
-        print("    set HF_TOKEN=hf_your_token")
-        print("")
-        print("Get your token: https://huggingface.co/settings/tokens")
+        print("ERROR: HF_TOKEN not set.\n  export HF_TOKEN=hf_your_token")
         sys.exit(1)
     return token
 
 
-def build_job_cmd(args) -> str:
-    """Return the bash command that runs inside the HF Job container."""
-
-    # ── training command ───────────────────────────────────────────────
+def build_unsloth_cmd(args) -> str:
+    """Shell command for the hand-rolled Unsloth training script."""
     train_args = [
-        f"--model {args.model}",
+        f"--model {args.model_unsloth}",
         f"--episodes {args.episodes}",
         f"--batch-size {args.batch_size}",
         f"--max-completion-length {args.max_completion_length}",
@@ -63,131 +89,206 @@ def build_job_cmd(args) -> str:
         train_args.append("--curriculum")
 
     train_cmd = "python train_unsloth_grpo.py " + " ".join(train_args)
+    return _wrap_pipeline(args, train_cmd, "train_unsloth_grpo.py")
 
-    # ── before/after inference for comparison ─────────────────────────
+
+def build_trl_cmd(args) -> str:
+    """Shell command for the TRL-native training script (A100)."""
+    train_args = [
+        f"--model {args.model_trl}",
+        f"--episodes {args.episodes}",
+        f"--batch-size {args.batch_size}",
+        f"--n-seeds {args.n_seeds}",
+        f"--max-completion-length {args.max_completion_length}",
+        f"--grad-accum {args.grad_accum}",
+        "--output-dir /data/outputs",
+        "--trajectory-file /data/outputs/trajectory.jsonl",
+        "--push-to-hub",
+        f"--hub-model-id {args.hub_model_id}",
+    ]
+    if not args.no_curriculum:
+        train_args.append("--curriculum")
+        train_args.append(f"--curriculum-threshold {args.curriculum_threshold}")
+
+    train_cmd = "python train_trl_grpo.py " + " ".join(train_args)
+    return _wrap_pipeline(args, train_cmd, "train_trl_grpo.py")
+
+
+def _wrap_pipeline(args, train_cmd: str, script_name: str) -> str:
+    """Wrap train command with git clone, before/after inference, and artifact upload."""
+    parts = [
+        f"git clone {args.github_repo} /workspace",
+        "cd /workspace",
+        # Copy TRL script in case it's not in the repo yet
+        "pip install -q trl>=0.15 vllm>=0.6 peft>=0.12 openenv-core[core] 2>&1 | tail -5",
+    ]
+
     if args.before_after:
         before_cmd = (
-            "python inference.py "
-            f"--model-path {args.model} "
-            "--use-unsloth --load-in-4bit "
+            f"python inference.py "
+            f"--model-path {args.model_trl if args.script == 'trl' else args.model_unsloth} "
             f"--max-new-tokens {args.max_completion_length} "
-            "--episodes 3 "
-            "--difficulty learning "
+            "--episodes 3 --difficulty learning "
             "--output /data/outputs/before_inference.json "
             "--trajectory-file /data/outputs/before_trajectory.jsonl"
         )
+        parts.append(f"echo '=== Before Inference ===' && {before_cmd}")
+
+    parts.append(f"echo '=== Training ({script_name}) ===' && {train_cmd}")
+
+    if args.before_after:
         after_cmd = (
             "python inference.py "
             "--model-path /data/outputs/final "
-            "--use-unsloth --load-in-4bit "
             f"--max-new-tokens {args.max_completion_length} "
-            "--episodes 3 "
-            "--difficulty learning "
+            "--episodes 3 --difficulty learning "
             "--output /data/outputs/after_inference.json "
             "--trajectory-file /data/outputs/after_trajectory.jsonl"
         )
-    else:
-        before_cmd = ""
-        after_cmd = ""
+        parts.append(f"echo '=== After Inference ===' && {after_cmd}")
 
-    # ── artifact upload to HF dataset ─────────────────────────────────
+    # Upload all artifacts to a companion dataset repo
     dataset_repo = f"{args.hub_model_id}-runs"
     upload_script = (
         "python -c \""
-        "from huggingface_hub import HfApi; "
-        "import os; "
+        "from huggingface_hub import HfApi; import os; "
         "api = HfApi(); "
         f"repo = '{dataset_repo}'; "
         "api.create_repo(repo_id=repo, repo_type='dataset', exist_ok=True); "
         "files = ["
         "  '/data/outputs/metrics.json',"
         "  '/data/outputs/trajectory.jsonl',"
-        "  '/data/outputs/before_trajectory.jsonl',"
-        "  '/data/outputs/after_trajectory.jsonl',"
         "  '/data/outputs/before_inference.json',"
         "  '/data/outputs/after_inference.json',"
         "]; "
-        "[ api.upload_file("
-        "    path_or_fileobj=f, "
-        "    path_in_repo=os.path.basename(f), "
+        "[api.upload_file("
+        "    path_or_fileobj=f, path_in_repo=os.path.basename(f),"
         "    repo_id=repo, repo_type='dataset'"
         "  ) or print(f'Uploaded {f}')"
-        "  for f in files if os.path.exists(f) "
+        "  for f in files if os.path.exists(f)"
         "]\""
     )
-
-    # ── assemble full pipeline ─────────────────────────────────────────
-    parts = [f"git clone {args.github_repo} /workspace", "cd /workspace"]
-    if before_cmd:
-        parts.append(f"echo '=== Before Inference ===' && {before_cmd}")
-    parts.append(f"echo '=== Training ===' && {train_cmd}")
-    if after_cmd:
-        parts.append(f"echo '=== After Inference ===' && {after_cmd}")
     parts.append(f"echo '=== Uploading artifacts ===' && {upload_script}")
 
     return " && ".join(parts)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Launch DispatchR GRPO training on HF Jobs")
-    parser.add_argument("--flavor", default="l4x1",
-                        help="GPU flavor (l4x1=$0.80/hr, a10g-large=$1.50/hr, a100-large=$2.50/hr)")
-    parser.add_argument("--episodes", type=int, default=200)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--max-completion-length", type=int, default=256,
-                        help="Max tokens per generation. 256 is fast, 512 is safe, 1536 is slow.")
-    parser.add_argument("--timeout", default="8h", help="Job timeout (e.g. 8h, 4h, 30m)")
-    parser.add_argument("--model", default="unsloth/Qwen3-4B-Thinking-2507-bnb-4bit")
-    parser.add_argument("--hub-model-id", default="ggtejas/dispatchr-grpo",
-                        help="HF Hub model ID for checkpoint push (username/repo)")
-    parser.add_argument("--github-repo", default="https://github.com/garg-tejas/dispatchR.git")
-    parser.add_argument("--no-curriculum", action="store_true", help="Disable curriculum learning")
-    parser.add_argument(
-        "--before-after", action="store_true",
-        help="Run 3-episode inference before AND after training for comparison.",
+    parser = argparse.ArgumentParser(
+        description="Launch DispatchR GRPO training on HF Jobs"
     )
-    parser.add_argument("--dry-run", action="store_true", help="Print command without submitting")
+
+    # ── Job config ────────────────────────────────────────────────────
+    parser.add_argument(
+        "--flavor",
+        default="a100-large",
+        choices=list(FLAVORS.keys()),
+        help="GPU flavor. a100-large recommended for TRL script.",
+    )
+    parser.add_argument(
+        "--script",
+        default="trl",
+        choices=["trl", "unsloth"],
+        help=(
+            "'trl' = new TRL-native script (A100, fast, no BNB). "
+            "'unsloth' = hand-rolled loop (L4, BNB quantization)."
+        ),
+    )
+    parser.add_argument("--timeout", default="8h")
+    parser.add_argument("--dry-run", action="store_true")
+
+    # ── Training config ───────────────────────────────────────────────
+    parser.add_argument("--episodes",    type=int,   default=500)
+    parser.add_argument("--batch-size",  type=int,   default=8)
+    parser.add_argument("--grad-accum",  type=int,   default=2,
+                        help="Gradient accumulation steps (TRL script only).")
+    parser.add_argument("--n-seeds",     type=int,   default=1000,
+                        help="Dataset manifest size (TRL script only).")
+    parser.add_argument("--max-completion-length", type=int, default=512)
+    parser.add_argument(
+        "--model-trl",
+        default="Qwen/Qwen3-4B",
+        help="Model for TRL script. Must be BF16-compatible (no BNB).",
+    )
+    parser.add_argument(
+        "--model-unsloth",
+        default="unsloth/Qwen3-4B-Thinking-2507-bnb-4bit",
+        help="Model for Unsloth script.",
+    )
+    parser.add_argument("--no-curriculum",  action="store_true")
+    parser.add_argument("--curriculum-threshold", type=float, default=0.65)
+    parser.add_argument("--before-after",   action="store_true",
+                        help="Run inference before and after training for comparison.")
+
+    # ── Hub config ────────────────────────────────────────────────────
+    parser.add_argument(
+        "--hub-model-id",
+        default="ggtejas/dispatchr-grpo",
+        help="HF Hub repo to push checkpoints to.",
+    )
+    parser.add_argument(
+        "--github-repo",
+        default="https://github.com/garg-tejas/dispatchR.git",
+    )
     args = parser.parse_args()
 
-    job_cmd = build_job_cmd(args)
-    hf_token = get_hf_token()
+    # ── Build job command ─────────────────────────────────────────────
+    if args.script == "trl":
+        job_cmd = build_trl_cmd(args)
+        deps    = DEPS_TRL
+        model   = args.model_trl
+    else:
+        job_cmd = build_unsloth_cmd(args)
+        deps    = DEPS_UNSLOTH
+        model   = args.model_unsloth
 
+    hf_token = get_hf_token()
+    flavor_info = FLAVORS[args.flavor]
+
+    # ── Warn on mismatched flavor / script ────────────────────────────
+    recommended = flavor_info["recommended_script"]
+    if recommended != args.script:
+        print(
+            f"WARN: --flavor {args.flavor} is optimised for '{recommended}' "
+            f"but you chose --script {args.script}.\n"
+            f"      This will work but may be slower or hit OOM.\n"
+        )
+
+    # ── Assemble hf CLI command ───────────────────────────────────────
     cmd = [
         "hf", "jobs", "uv", "run",
         "--flavor", args.flavor,
         "--timeout", args.timeout,
-        # dependencies
-        "--with", "unsloth",
-        "--with", "transformers",
-        "--with", "accelerate",
-        "--with", "datasets",
-        "--with", "trl",
-        "--with", "numpy",
-        "--with", "networkx",
-        "--with", "matplotlib",
-        "--with", "huggingface-hub",
-        "--with", "jmespath",
-        "--with", "openenv-core[core]",
-        # pass token as env var
+    ]
+    for dep in deps:
+        cmd += ["--with", dep]
+    cmd += [
         "--env", f"HF_TOKEN={hf_token}",
         "--label", "project=dispatchr",
-        "--label", f"model={args.model.split('/')[-1]}",
+        "--label", f"script={args.script}",
+        "--label", f"model={model.split('/')[-1]}",
         "--", "bash", "-c", job_cmd,
     ]
 
+    # ── Print summary ─────────────────────────────────────────────────
     print("=" * 60)
     print("DispatchR HF Job Launcher")
     print("=" * 60)
-    print(f"Flavor:       {args.flavor}")
-    print(f"Episodes:     {args.episodes}")
-    print(f"Batch:        {args.batch_size}")
-    print(f"Max tokens:   {args.max_completion_length}")
-    print(f"Timeout:      {args.timeout}")
-    print(f"Model:        {args.model}")
-    print(f"Hub ID:       {args.hub_model_id}")
-    print(f"Before/After: {'yes' if args.before_after else 'no'}")
-    print(f"Runs dataset: https://huggingface.co/datasets/{args.hub_model_id}-runs")
-    print("")
+    print(f"  Flavor:       {args.flavor}  ({flavor_info['vram_gb']}GB VRAM, {flavor_info['price']})")
+    print(f"  Script:       {args.script}")
+    print(f"  Model:        {model}")
+    print(f"  Episodes:     {args.episodes}")
+    print(f"  Batch size:   {args.batch_size}")
+    if args.script == "trl":
+        print(f"  Grad accum:   {args.grad_accum}  (eff. batch = {args.batch_size * args.grad_accum})")
+        print(f"  Seeds:        {args.n_seeds}")
+    print(f"  Max tokens:   {args.max_completion_length}")
+    print(f"  Timeout:      {args.timeout}")
+    print(f"  Hub ID:       {args.hub_model_id}")
+    print(f"  Runs dataset: https://huggingface.co/datasets/{args.hub_model_id}-runs")
+    print(f"  Curriculum:   {'yes' if not args.no_curriculum else 'no'}")
+    print(f"  Before/After: {'yes' if args.before_after else 'no'}")
+    print()
 
     if args.dry_run:
         print("[DRY RUN] hf CLI command:")
@@ -198,7 +299,9 @@ def main():
             print(f"  {i}. {part[:120]}{'...' if len(part) > 120 else ''}")
         return
 
-    run_command(cmd)
+    print(f"Running: {' '.join(cmd[:8])} ...")
+    result = subprocess.run(cmd)
+    sys.exit(result.returncode)
 
 
 if __name__ == "__main__":
