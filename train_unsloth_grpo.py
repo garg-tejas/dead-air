@@ -454,7 +454,8 @@ def main():
     # ------------------------------------------------------------------
     num_batches = max(1, args.episodes // args.batch_size)
 
-    # Restore history from a previous run (empty lists on fresh start)
+    # Restore history from a previous run (empty dict on fresh start)
+    resume_state: dict = {}
     reward_history: list = list(resume_state.get("reward_history", []))
     loss_history: list   = list(resume_state.get("loss_history", []))
     start_batch: int     = resume_state.get("batch_idx_done", -1) + 1

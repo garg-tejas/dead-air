@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from .constants import MAX_STEPS
 from .dispatcher_environment import DispatcherEnvironment
+from .prompt_utils import format_observation
 
 
 class DispatchRGRPOEnv:
@@ -167,7 +168,6 @@ class DispatchRGRPOEnv:
         Delegates to the shared ``format_observation`` so prompt formatting
         stays consistent across training, inference, and wrapper usage.
         """
-        from .prompt_utils import format_observation
         return format_observation(obs)
 
     # ------------------------------------------------------------------
@@ -260,11 +260,7 @@ class DispatchRGRPOEnv:
         Returns:
             Confidence level string.
         """
-        if self._obs and self._obs.get("done"):
-            return "Episode has already ended."
-        self._obs = self._env.step({"action_type": "verify", "call_id": call_id})
-        events = self._obs.get("recent_events", [])
-        return "\n".join(events) if events else "Verified."
+        return self._step({"action_type": "verify", "call_id": call_id})
 
     @property
     def reward(self) -> Optional[float]:

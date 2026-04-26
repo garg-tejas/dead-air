@@ -1,0 +1,51 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.venv
+venv
+env
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Build artifacts
+build
+dist
+*.egg
+*.whl
+
+# Logs and outputs
+*.log
+outputs/
+trained_models/
+completion_lengths.json
+
+# Media and assets
+*.gif
+*.mp4
+*.png
+*.jpg
+assets/
+
+# Tests
+tests/
+.pytest_cache
+
+# Local docs (not for repo)
+HF_SETUP_GUIDE.md
+PLAN.md
+STORY.md
+
+# Misc
+.DS_Store
+*.bak
+*.tmp

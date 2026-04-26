@@ -18,13 +18,6 @@ SEVERITY_WEIGHTS = {
     "false_alarm": 0.0,
 }
 
-# Caller tone mapping from panic modifier
-PANIC_TONES = {
-    "calm": (0.6, 0.9),
-    "agitated": (0.9, 1.2),
-    "screaming": (1.2, 1.5),
-}
-
 # 20-node canonical city topology
 # 5 zones x 4 nodes each
 CANONICAL_CITY_EDGES: List[Tuple[int, int, Dict[str, Any]]] = [

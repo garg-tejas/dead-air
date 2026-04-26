@@ -282,7 +282,7 @@ class DispatcherEnvironment(Environment):
                 invalidity_penalty = (self._invalid_action_count / total_actions) * 0.05
                 idle_penalty = (self._hold_count / total_actions) * 0.02
                 reward = reward + validity_bonus - invalidity_penalty - idle_penalty
-                reward = max(0.0, reward)  # Allow >1.0 so perfect-run bonus is not clipped
+                reward = max(0.0, reward)  # Floor at 0; total_reward from RewardComputer may already exceed 1.0
 
             # Attach step-level metrics to result for inspection
             result["validity_bonus"] = validity_bonus if total_actions > 0 else 0.0
