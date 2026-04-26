@@ -27,6 +27,7 @@ WORKDIR /app
 USER 1000
 ENV PATH="/home/user/.local/bin:${PATH}"
 ENV PYTHONPATH="/app:$PYTHONPATH"
+ENV ENABLE_WEB_INTERFACE=true
 
 # Copy and install ONLY runtime dependencies (no training libs)
 COPY --chown=user pyproject.toml .

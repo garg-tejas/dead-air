@@ -4,6 +4,8 @@ type: space
 runtime: fastapi
 app: server.app:app
 port: 7860
+env:
+  ENABLE_WEB_INTERFACE: "true"
 emoji: 🚑
 colorFrom: red
 colorTo: blue
