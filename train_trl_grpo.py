@@ -100,6 +100,9 @@ from server.constants import CURRICULUM_PHASES, MAX_STEPS
 from server.grpo_env_wrapper import DispatchRGRPOEnv
 from server.prompt_utils import SYSTEM_PROMPT, build_chat_prompt, format_observation
 
+# Module-level counter for deterministic seeds in rollout_func
+_rollout_counter = 0
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1.  DATASET BUILDER
@@ -550,9 +553,6 @@ def main():
         print(
             "      Install trl>=0.27 for full multi-step vLLM rollout support."
         )
-
-    # Counter for deterministic seeds when rollout_func can't access dataset rows
-    _rollout_counter = 0
 
     def rollout_func(prompts: list, trainer) -> dict:
         """Run full DispatchR episodes with all steps going through vLLM.
